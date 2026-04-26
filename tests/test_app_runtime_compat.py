@@ -37,3 +37,13 @@ def test_generate_episode_call_is_backward_compatible(monkeypatch) -> None:
         "regime": None,
         "use_student_t": True,
     }
+
+
+def test_mode_configs_generate_long_dynamic_live_episodes() -> None:
+    for mode_key, cfg in app.MODE_CONFIGS.items():
+        returns_df, meta = app._call_generate_episode_with_compat(cfg, seed=42)
+
+        assert meta.get("dynamic_regimes") is True
+        assert len(returns_df) >= int(cfg["steps_range"][0])
+        assert len(returns_df) <= int(cfg["steps_range"][1])
+        assert len(set(returns_df["regime"].tolist())) >= 2, mode_key

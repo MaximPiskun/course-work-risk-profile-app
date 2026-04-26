@@ -2,6 +2,7 @@
 
 import json
 import inspect
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -29,10 +30,10 @@ MODE_CONFIGS: dict[str, dict[str, Any]] = {
     "standard": {
         "title": "Стандартный режим",
         "description": "Случайная смена рыночных фаз со средней интенсивностью. Подходит для большинства пользователей.",
-        "duration": "Переменная: обычно 18-24 шага (≈5-8 минут)",
-        "months": 24,
-        "steps_range": (18, 24),
-        "segment_range": (4, 7),
+        "duration": "Переменная: 150-300 тиков (примерно 2.5-5 минут при 1 сек/тик)",
+        "months": 220,
+        "steps_range": (150, 300),
+        "segment_range": (12, 32),
         "regime_weights": {"Bull": 0.34, "Sideways": 0.33, "Crisis": 0.33},
         "regime": None,
         "intensity": "Средняя",
@@ -40,10 +41,10 @@ MODE_CONFIGS: dict[str, dict[str, Any]] = {
     "stress": {
         "title": "Стресс-сценарий",
         "description": "Случайная смена фаз с повышенной вероятностью кризиса и более резкими переходами.",
-        "duration": "Переменная: обычно 18-24 шага (≈5-8 минут)",
-        "months": 24,
-        "steps_range": (18, 24),
-        "segment_range": (3, 6),
+        "duration": "Переменная: 150-300 тиков (примерно 2.5-5 минут при 1 сек/тик)",
+        "months": 220,
+        "steps_range": (150, 300),
+        "segment_range": (10, 26),
         "regime_weights": {"Bull": 0.15, "Sideways": 0.30, "Crisis": 0.55},
         "regime": None,
         "intensity": "Высокая",
@@ -51,10 +52,10 @@ MODE_CONFIGS: dict[str, dict[str, Any]] = {
     "quick": {
         "title": "Быстрый режим",
         "description": "Короткий динамичный прогон: фазы меняются чаще, общий путь короче.",
-        "duration": "Переменная: обычно 10-14 шагов (≈3-5 минут)",
-        "months": 14,
-        "steps_range": (10, 14),
-        "segment_range": (3, 5),
+        "duration": "Переменная: 120-210 тиков (примерно 2-3.5 минуты при 1 сек/тик)",
+        "months": 160,
+        "steps_range": (120, 210),
+        "segment_range": (8, 22),
         "regime_weights": {"Bull": 0.33, "Sideways": 0.34, "Crisis": 0.33},
         "regime": None,
         "intensity": "Ниже средней",
@@ -65,6 +66,21 @@ REBALANCE_PRESETS: dict[str, dict[str, int]] = {
     "Консервативно": {"Cash": 45, "Bonds": 40, "Stocks": 10, "Gold": 5},
     "Сбалансированно": {"Cash": 30, "Bonds": 35, "Stocks": 30, "Gold": 5},
     "Рост": {"Cash": 10, "Bonds": 20, "Stocks": 60, "Gold": 10},
+}
+
+REGIME_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    "Bull": {
+        "label": "Рост",
+        "hint": "Преобладает восходящий тренд: положительный дрейф с редкими откатами.",
+    },
+    "Crisis": {
+        "label": "Падение",
+        "hint": "Стрессовый режим: волатильность выше нормы, возможны резкие просадки.",
+    },
+    "Sideways": {
+        "label": "Боковик",
+        "hint": "Диапазонный рынок: движения смешанные, явного тренда может не быть.",
+    },
 }
 
 
@@ -215,6 +231,8 @@ def initialize_state() -> None:
         "db_path": DB_DEFAULT_PATH,
         "run_session_id": None,
         "final_scores_persisted": False,
+        "live_tick_seconds": 1.0,
+        "live_last_advance_at": 0.0,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -251,6 +269,8 @@ def hard_reset() -> None:
             "sim_bonds_pct",
             "sim_stocks_pct",
             "sim_gold_pct",
+            "live_tick_seconds",
+            "live_last_advance_at",
         }:
             del st.session_state[key]
     initialize_state()
@@ -371,7 +391,7 @@ def _build_value_plot(values: list[float]) -> plt.Figure:
     x = np.arange(len(values))
     ax.plot(x, values, linewidth=2.0, color="#2a5a9e")
     ax.set_title("Траектория стоимости портфеля")
-    ax.set_xlabel("Шаг")
+    ax.set_xlabel("Тик")
     ax.set_ylabel("Стоимость")
     ax.grid(alpha=0.2)
     fig.tight_layout()
@@ -387,7 +407,7 @@ def _build_drawdown_plot(values: list[float]) -> plt.Figure:
     ax.fill_between(x, dd, 0, alpha=0.25, color="#9db7e8")
     ax.plot(x, dd, linewidth=1.8, color="#2a5a9e")
     ax.set_title("Просадка")
-    ax.set_xlabel("Шаг")
+    ax.set_xlabel("Тик")
     ax.set_ylabel("Drawdown")
     ax.grid(alpha=0.2)
     fig.tight_layout()
@@ -453,7 +473,7 @@ def _build_asset_paths_plot(asset_index_df: pd.DataFrame, title: str) -> plt.Fig
     for asset in ["Cash", "Bonds", "Stocks", "Gold"]:
         ax.plot(asset_index_df["month_index"], asset_index_df[asset], linewidth=1.9, label=asset)
     ax.set_title(title)
-    ax.set_xlabel("Шаг")
+    ax.set_xlabel("Тик")
     ax.set_ylabel("Индекс (старт = 100)")
     ax.grid(alpha=0.2)
     ax.legend(loc="best", ncols=2, fontsize=8)
@@ -491,7 +511,7 @@ def build_market_commentary(regime: str, month_idx: int, drawdown: float, last_s
         return "Рынок смешанный: оценивайте баланс между защитой капитала и участием в росте."
 
     if drawdown <= -0.15 or last_stock_ret <= -0.08:
-        return "Рынок снижается второй месяц подряд. Волатильность выросла, участники становятся осторожнее."
+        return "Рынок снижается второй тик подряд. Волатильность выросла, участники становятся осторожнее."
     if last_stock_ret >= 0.06 and drawdown > -0.06:
         return "Наблюдается восстановление после снижения. Рынок демонстрирует признаки стабилизации."
     if -0.02 <= last_stock_ret <= 0.02:
@@ -539,7 +559,7 @@ def _engagement_hint(
     if is_paused:
         return "Симуляция на паузе. Проверьте решение и продолжайте в своем темпе."
     if remaining <= 3:
-        return "Финальный отрезок. Еще несколько шагов до итогового профиля."
+        return "Финальный отрезок. Еще несколько тиков до итогового профиля."
     if current_drawdown <= -0.12:
         return "Сильная просадка: важный момент для оценки вашего реального риска."
     if current_step <= max(2, total_steps // 4):
@@ -741,11 +761,13 @@ def start_episode(mode_key: str) -> None:
     st.session_state.ended_early = False
     st.session_state.final_scores_persisted = False
     st.session_state.run_session_id = st.session_state.episode_id
+    st.session_state.live_tick_seconds = 1.0
+    st.session_state.live_last_advance_at = float(time.monotonic())
     phase_count = len(meta.get("regime_path", []))
     if phase_count > 0:
-        st.session_state.flash_message = f"Сценарий собран: {len(returns_df)} шагов, {phase_count} фаз."
+        st.session_state.flash_message = f"Сценарий собран: {len(returns_df)} тиков, {phase_count} фаз."
     else:
-        st.session_state.flash_message = f"Сценарий собран: {len(returns_df)} шагов."
+        st.session_state.flash_message = f"Сценарий собран: {len(returns_df)} тиков."
     _persist_session_start(
         mode_key=mode_key,
         mode_title=cfg["title"],
@@ -754,6 +776,137 @@ def start_episode(mode_key: str) -> None:
     )
     st.session_state.sim_paused = False
     st.session_state.screen = "simulation"
+
+
+def _tick_interval_seconds() -> float:
+    raw_value = float(st.session_state.get("live_tick_seconds", 1.0) or 1.0)
+    tick_seconds = float(np.clip(raw_value, 0.5, 2.0))
+    st.session_state.live_tick_seconds = tick_seconds
+    return tick_seconds
+
+
+def _seconds_until_next_tick() -> float:
+    tick_seconds = _tick_interval_seconds()
+    last_advance_at = float(st.session_state.get("live_last_advance_at", 0.0) or 0.0)
+    if last_advance_at <= 0.0:
+        return tick_seconds
+    elapsed = float(time.monotonic()) - last_advance_at
+    return float(max(tick_seconds - elapsed, 0.0))
+
+
+def _rerun_simulation_view() -> None:
+    try:
+        st.rerun(scope="fragment")
+    except Exception:
+        st.rerun()
+
+
+def _apply_market_tick(
+    *,
+    month_idx: int,
+    returns_df: pd.DataFrame,
+    regime: str,
+    phase_label: str,
+    chosen_w: dict[str, float],
+    discomfort: int,
+    rebalance: int,
+    go_to_cash: int,
+    reduce_risk_flag: int,
+    action_label: str,
+    decision_origin: str,
+) -> None:
+    current_value = float(st.session_state.portfolio_values[-1])
+    row = returns_df.iloc[month_idx]
+    chosen_w = _normalize_weights(chosen_w)
+
+    portfolio_return = (
+        chosen_w["Cash"] * float(row["ret_cash"])
+        + chosen_w["Bonds"] * float(row["ret_bonds"])
+        + chosen_w["Stocks"] * float(row["ret_stocks"])
+        + chosen_w["Gold"] * float(row["ret_gold"])
+    )
+    new_value = current_value * (1.0 + portfolio_return)
+
+    st.session_state.portfolio_values.append(float(new_value))
+    st.session_state.portfolio_returns.append(float(portfolio_return))
+    new_dd = _current_drawdown(st.session_state.portfolio_values)
+    new_vol = _vol_estimate(st.session_state.portfolio_returns)
+
+    event_data = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "episode_id": st.session_state.episode_id,
+        "month_index": int(month_idx + 1),
+        "regime": regime,
+        "phase_label": phase_label,
+        "ret_cash": float(row["ret_cash"]),
+        "ret_bonds": float(row["ret_bonds"]),
+        "ret_stocks": float(row["ret_stocks"]),
+        "ret_gold": float(row["ret_gold"]),
+        "w_cash": float(chosen_w["Cash"]),
+        "w_bonds": float(chosen_w["Bonds"]),
+        "w_stocks": float(chosen_w["Stocks"]),
+        "w_gold": float(chosen_w["Gold"]),
+        "portfolio_return": float(portfolio_return),
+        "portfolio_value": float(new_value),
+        "drawdown": float(new_dd),
+        "volatility_estimate": float(new_vol),
+        "rebalance": int(rebalance),
+        "go_to_cash": int(go_to_cash),
+        "reduce_risk": int(reduce_risk_flag),
+        "end_early": 0,
+        "discomfort_1_5": int(discomfort),
+        "action_label": str(action_label),
+        "decision_origin": str(decision_origin),
+    }
+    st.session_state.logs.append(event_data)
+    _persist_decision_event(event_data)
+
+    st.session_state.current_weights = chosen_w
+    st.session_state.month_index = month_idx + 1
+    st.session_state.live_last_advance_at = float(time.monotonic())
+
+
+def _maybe_run_auto_tick(
+    *,
+    month_idx: int,
+    total_steps: int,
+    returns_df: pd.DataFrame,
+    regime: str,
+    phase_label: str,
+) -> bool:
+    if bool(st.session_state.get("sim_paused", False)):
+        return False
+    if month_idx >= total_steps:
+        return False
+
+    tick_seconds = _tick_interval_seconds()
+    now = float(time.monotonic())
+    last_advance_at = float(st.session_state.get("live_last_advance_at", 0.0) or 0.0)
+    if last_advance_at <= 0.0:
+        st.session_state.live_last_advance_at = now
+        return False
+    if now - last_advance_at < tick_seconds:
+        return False
+
+    _apply_market_tick(
+        month_idx=month_idx,
+        returns_df=returns_df,
+        regime=regime,
+        phase_label=phase_label,
+        chosen_w=dict(st.session_state.current_weights),
+        discomfort=int(st.session_state.get("sim_uncomfortable", 3)),
+        rebalance=0,
+        go_to_cash=0,
+        reduce_risk_flag=0,
+        action_label="Авто: сохранение структуры",
+        decision_origin="auto",
+    )
+
+    if st.session_state.month_index >= total_steps:
+        st.session_state.screen = "results"
+        st.session_state.completed = True
+        st.session_state.flash_message = "Симуляция завершена, можно перейти к результатам."
+    return True
 
 
 def validate_questionnaire_step(step: int) -> tuple[bool, str]:
@@ -940,6 +1093,7 @@ def render_mode_selection() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+@st.fragment(run_every=1.0)
 def render_simulation() -> None:
     if st.session_state.onboarding_profile is None or st.session_state.episode_returns is None:
         st.warning("Сначала заполните анкету и выберите режим.")
@@ -947,10 +1101,6 @@ def render_simulation() -> None:
             st.session_state.screen = "mode"
             st.rerun()
         return
-
-    if st.session_state.flash_message:
-        st.success(st.session_state.flash_message)
-        st.session_state.flash_message = ""
 
     month_idx = int(st.session_state.month_index)
     total_steps = int(st.session_state.simulation_months)
@@ -964,6 +1114,32 @@ def render_simulation() -> None:
     regime = str(current_market.get("regime", "Sideways"))
     phase_label = str(current_market.get("phase_label", ""))
     phase_step = int(current_market.get("phase_step", month_idx + 1))
+
+    if _maybe_run_auto_tick(
+        month_idx=month_idx,
+        total_steps=total_steps,
+        returns_df=returns_df,
+        regime=regime,
+        phase_label=phase_label,
+    ):
+        _rerun_simulation_view()
+
+    if st.session_state.flash_message:
+        st.success(st.session_state.flash_message)
+        st.session_state.flash_message = ""
+
+    month_idx = int(st.session_state.month_index)
+    if month_idx >= total_steps:
+        st.session_state.completed = True
+        st.session_state.screen = "results"
+        st.rerun()
+
+    current_market = returns_df.iloc[month_idx]
+    regime = str(current_market.get("regime", "Sideways"))
+    phase_label = str(current_market.get("phase_label", ""))
+    phase_step = int(current_market.get("phase_step", month_idx + 1))
+    regime_view = REGIME_DESCRIPTIONS.get(regime, {"label": regime, "hint": "Смешанный режим."})
+
     current_values = st.session_state.portfolio_values
     current_value = float(current_values[-1])
     initial_value = float(current_values[0])
@@ -971,12 +1147,13 @@ def render_simulation() -> None:
     current_dd = _current_drawdown(current_values)
     max_dd = _max_drawdown(current_values)
     vol_est = _vol_estimate(st.session_state.portfolio_returns)
+    next_tick_seconds = _seconds_until_next_tick()
 
     st.markdown('<div class="soft-card">', unsafe_allow_html=True)
     st.subheader("Основная симуляция")
     st.caption(
         f"Режим прохождения: {st.session_state.episode_meta.get('mode_title', '-')}. "
-        f"Шаг {month_idx + 1} из {total_steps}."
+        f"Тик {month_idx + 1} из {total_steps}. Скорость: {st.session_state.live_tick_seconds:.1f} сек/тик."
     )
 
     remaining_steps = max(total_steps - month_idx, 0)
@@ -999,7 +1176,7 @@ def render_simulation() -> None:
               <div class="engagement-value">{progress_pct}%</div>
             </div>
             <div class="engagement-pill">
-              <div class="engagement-label">Осталось шагов</div>
+              <div class="engagement-label">Осталось тиков</div>
               <div class="engagement-value">{remaining_steps}</div>
             </div>
             <div class="engagement-pill">
@@ -1008,7 +1185,7 @@ def render_simulation() -> None:
             </div>
             <div class="engagement-pill">
               <div class="engagement-label">Текущий режим</div>
-              <div class="engagement-value">{regime}</div>
+              <div class="engagement-value">{regime_view['label']}</div>
             </div>
           </div>
         </div>
@@ -1017,8 +1194,8 @@ def render_simulation() -> None:
     )
 
     row1 = st.columns(3)
-    row1[0].metric("Шаг", f"{month_idx + 1}/{total_steps}")
-    row1[1].metric("Осталось шагов", f"{remaining_steps}")
+    row1[0].metric("Тик", f"{month_idx + 1}/{total_steps}")
+    row1[1].metric("До следующего тика", "Пауза" if st.session_state.sim_paused else f"{next_tick_seconds:.1f} с")
     row1[2].metric("Стоимость портфеля", f"{current_value:,.0f}")
 
     row2 = st.columns(3)
@@ -1026,6 +1203,10 @@ def render_simulation() -> None:
     row2[1].metric("Текущая просадка", f"{current_dd:.2%}")
     row2[2].metric("Макс. просадка", f"{max_dd:.2%}")
 
+    st.caption(
+        "Live-режим: рынок движется автоматически в реальном времени. "
+        "Кнопка паузы останавливает тики и дает время на решение."
+    )
     st.caption(
         "Нейтральное раскрытие риска: результаты симуляции не гарантируют будущую доходность. "
         "Снижение риска может уменьшать волатильность, но фиксирует часть убытка."
@@ -1035,19 +1216,20 @@ def render_simulation() -> None:
     if phase_path:
         with st.expander("План смены фаз в этом прогоне"):
             phase_df = pd.DataFrame(phase_path)[["phase_label", "regime", "length"]].copy()
-            phase_df.columns = ["Фаза", "Рыночный режим", "Шагов в фазе"]
+            phase_df.columns = ["Фаза", "Рыночный режим", "Тиков в фазе"]
             st.dataframe(phase_df, width="stretch", hide_index=True)
 
     decision_col, context_col = st.columns([1.0, 1.45], gap="large")
 
     with decision_col:
         st.markdown("#### A. Панель решения")
-        st.caption("Действуйте по текущему шагу. Остальной контекст доступен рядом.")
+        st.caption("Рынок идет live-тиками. Для вдумчивого выбора поставьте симуляцию на паузу.")
         pause_col, _ = st.columns([1.0, 1.0])
         if st.session_state.sim_paused:
             if pause_col.button("Возобновить симуляцию", width="stretch"):
                 st.session_state.sim_paused = False
-                st.session_state.flash_message = "Пауза снята. Можно принять решение."
+                st.session_state.live_last_advance_at = float(time.monotonic())
+                st.session_state.flash_message = "Пауза снята. Live-движение продолжено."
                 st.rerun()
             st.warning("Симуляция на паузе: период не продвигается, можно спокойно настроить решение.")
         else:
@@ -1055,7 +1237,7 @@ def render_simulation() -> None:
                 st.session_state.sim_paused = True
                 st.session_state.flash_message = "Симуляция поставлена на паузу."
                 st.rerun()
-            st.caption("Шаг изменится только после кнопки принятия решения.")
+            st.caption("Без паузы следующий тик произойдет автоматически.")
 
         cw = st.session_state.current_weights
         st.write("Текущая структура портфеля:")
@@ -1066,6 +1248,14 @@ def render_simulation() -> None:
             }
         )
         st.dataframe(weights_view, width="stretch", hide_index=True)
+        st.slider(
+            "Скорость live-тика, сек",
+            0.5,
+            2.0,
+            float(st.session_state.live_tick_seconds),
+            0.1,
+            key="live_tick_seconds",
+        )
 
         action = st.radio(
             "Ваше действие",
@@ -1108,9 +1298,7 @@ def render_simulation() -> None:
         discomfort = st.slider("Насколько вам сейчас некомфортно?", 1, 5, 3, key="sim_uncomfortable")
 
         c_apply, c_early = st.columns(2)
-        apply_disabled = bool(st.session_state.sim_paused) or (
-            action == "Ребалансировать" and not rebalance_total_valid
-        )
+        apply_disabled = action == "Ребалансировать" and not rebalance_total_valid
         apply_clicked = c_apply.button(
             "Принять решение и продолжить",
             type="primary",
@@ -1120,7 +1308,6 @@ def render_simulation() -> None:
         early_clicked = c_early.button(
             "Завершить досрочно",
             width="stretch",
-            disabled=bool(st.session_state.sim_paused),
         )
 
         if early_clicked:
@@ -1148,6 +1335,7 @@ def render_simulation() -> None:
                 "end_early": 1,
                 "discomfort_1_5": int(discomfort),
                 "action_label": _action_label(0, 0, 0, 1),
+                "decision_origin": "manual",
             }
             st.session_state.logs.append(event_data)
             _persist_decision_event(event_data)
@@ -1181,67 +1369,48 @@ def render_simulation() -> None:
                 chosen_w = {"Cash": 1.0, "Bonds": 0.0, "Stocks": 0.0, "Gold": 0.0}
                 go_to_cash = 1
 
-            row = returns_df.iloc[month_idx]
-            portfolio_return = (
-                chosen_w["Cash"] * float(row["ret_cash"])
-                + chosen_w["Bonds"] * float(row["ret_bonds"])
-                + chosen_w["Stocks"] * float(row["ret_stocks"])
-                + chosen_w["Gold"] * float(row["ret_gold"])
+            _apply_market_tick(
+                month_idx=month_idx,
+                returns_df=returns_df,
+                regime=regime,
+                phase_label=phase_label,
+                chosen_w=chosen_w,
+                discomfort=int(discomfort),
+                rebalance=rebalance,
+                go_to_cash=go_to_cash,
+                reduce_risk_flag=reduce_risk_flag,
+                action_label=_action_label(rebalance, go_to_cash, reduce_risk_flag, 0),
+                decision_origin="manual",
             )
-            new_value = current_value * (1.0 + portfolio_return)
 
-            st.session_state.portfolio_values.append(float(new_value))
-            st.session_state.portfolio_returns.append(float(portfolio_return))
-            new_dd = _current_drawdown(st.session_state.portfolio_values)
-            new_vol = _vol_estimate(st.session_state.portfolio_returns)
-
-            event_data = {
-                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                "episode_id": st.session_state.episode_id,
-                "month_index": int(month_idx + 1),
-                "regime": regime,
-                "phase_label": phase_label,
-                "ret_cash": float(row["ret_cash"]),
-                "ret_bonds": float(row["ret_bonds"]),
-                "ret_stocks": float(row["ret_stocks"]),
-                "ret_gold": float(row["ret_gold"]),
-                "w_cash": float(chosen_w["Cash"]),
-                "w_bonds": float(chosen_w["Bonds"]),
-                "w_stocks": float(chosen_w["Stocks"]),
-                "w_gold": float(chosen_w["Gold"]),
-                "portfolio_return": float(portfolio_return),
-                "portfolio_value": float(new_value),
-                "drawdown": float(new_dd),
-                "volatility_estimate": float(new_vol),
-                "rebalance": int(rebalance),
-                "go_to_cash": int(go_to_cash),
-                "reduce_risk": int(reduce_risk_flag),
-                "end_early": 0,
-                "discomfort_1_5": int(discomfort),
-                "action_label": _action_label(rebalance, go_to_cash, reduce_risk_flag, 0),
-            }
-            st.session_state.logs.append(event_data)
-            _persist_decision_event(event_data)
-
-            st.session_state.current_weights = chosen_w
-            st.session_state.month_index = month_idx + 1
             if st.session_state.month_index >= total_steps:
                 st.session_state.screen = "results"
                 st.session_state.completed = True
                 st.session_state.flash_message = "Симуляция завершена, можно перейти к результатам."
             else:
-                st.session_state.flash_message = "Решение сохранено. Переходим к следующему шагу."
+                st.session_state.flash_message = "Решение применено. Live-симуляция продолжается."
             st.rerun()
 
     with context_col:
-        st.markdown("#### A. Рыночный контекст")
+        st.markdown("#### B. Рыночный контекст")
+        live_snapshot = pd.DataFrame(
+            {
+                "Актив": ["Cash", "Bonds", "Stocks", "Gold"],
+                "Доходность текущего тика": [
+                    f"{float(current_market['ret_cash']):.2%}",
+                    f"{float(current_market['ret_bonds']):.2%}",
+                    f"{float(current_market['ret_stocks']):.2%}",
+                    f"{float(current_market['ret_gold']):.2%}",
+                ],
+            }
+        )
         if month_idx > 0:
             prev = returns_df.iloc[month_idx - 1]
             last_stock = float(prev["ret_stocks"])
             snapshot = pd.DataFrame(
                 {
                     "Актив": ["Cash", "Bonds", "Stocks", "Gold"],
-                    "Доходность за прошлый период": [
+                    "Доходность прошлого тика": [
                         f"{float(prev['ret_cash']):.2%}",
                         f"{float(prev['ret_bonds']):.2%}",
                         f"{float(prev['ret_stocks']):.2%}",
@@ -1251,11 +1420,13 @@ def render_simulation() -> None:
             )
         else:
             last_stock = None
-            snapshot = pd.DataFrame({"Актив": ["Cash", "Bonds", "Stocks", "Gold"], "Доходность за прошлый период": ["-", "-", "-", "-"]})
+            snapshot = pd.DataFrame({"Актив": ["Cash", "Bonds", "Stocks", "Gold"], "Доходность прошлого тика": ["-", "-", "-", "-"]})
 
         st.info(build_market_commentary(regime, month_idx, current_dd, last_stock))
-        phase_text = f", {phase_label}, шаг в фазе {phase_step}" if phase_label else ""
-        st.write(f"Текущий рыночный режим: **{regime}**{phase_text}")
+        phase_text = f", {phase_label}, тик в фазе {phase_step}" if phase_label else ""
+        st.write(f"Текущий рыночный режим: **{regime_view['label']}** ({regime}){phase_text}")
+        st.caption(regime_view["hint"])
+        st.dataframe(live_snapshot, width="stretch", hide_index=True)
         st.dataframe(snapshot, width="stretch", hide_index=True)
 
         with st.expander("Что это значит: просадка и волатильность"):
@@ -1286,11 +1457,16 @@ def render_simulation() -> None:
     st.markdown("---")
     st.markdown("#### C. Лента событий и решений")
     if not st.session_state.logs:
-        st.info("История пока пуста. Примите первое решение, чтобы увидеть динамику.")
+        st.info("История пока пуста. Подождите первый тик или примите ручное решение.")
     else:
         history = pd.DataFrame(st.session_state.logs)
-        view = history[["month_index", "action_label", "portfolio_return", "portfolio_value", "drawdown", "discomfort_1_5"]].copy()
-        view.columns = ["Шаг", "Действие", "Доходность", "Стоимость", "Просадка", "Некомфортность (1-5)"]
+        if "decision_origin" not in history.columns:
+            history["decision_origin"] = "manual"
+        view = history[
+            ["month_index", "action_label", "decision_origin", "portfolio_return", "portfolio_value", "drawdown", "discomfort_1_5"]
+        ].copy()
+        view["decision_origin"] = view["decision_origin"].map({"auto": "Авто", "manual": "Ручное"}).fillna(view["decision_origin"])
+        view.columns = ["Тик", "Действие", "Источник", "Доходность", "Стоимость", "Просадка", "Некомфортность (1-5)"]
         st.dataframe(view.tail(10), width="stretch", hide_index=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -1418,7 +1594,7 @@ def render_results() -> None:
         st.info("Выраженных событий не зафиксировано.")
     else:
         view = important[["month_index", "action_label", "portfolio_return", "drawdown", "discomfort_1_5"]].copy()
-        view.columns = ["Шаг", "Событие", "Доходность", "Просадка", "Некомфортность (1-5)"]
+        view.columns = ["Тик", "Событие", "Доходность", "Просадка", "Некомфортность (1-5)"]
         st.dataframe(view, width="stretch", hide_index=True)
 
     st.markdown("### Скачать результаты")
