@@ -3,3 +3,6 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .DS_Store
+risk_profile_sessions.db
+data/calibration_labels.csv
+data/calibration_labels_template.csv

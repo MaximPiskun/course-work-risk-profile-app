@@ -63,9 +63,64 @@ def _clamp_returns(returns: dict[str, float]) -> dict[str, float]:
 
 
 def _generate_crash_month(rng: np.random.Generator, months: int) -> int:
+    if months <= 1:
+        return 1
+    if months <= 6:
+        return int(rng.integers(1, months + 1))
+
     low = 6
-    high = min(months - 3, 16)
+    high = max(low, min(months - 3, 16))
     return int(rng.integers(low, high + 1))
+
+
+def _normalize_regime_weights(
+    available_regimes: list[str],
+    regime_weights: dict[str, float] | None,
+) -> np.ndarray:
+    if not regime_weights:
+        return np.repeat(1.0 / len(available_regimes), len(available_regimes))
+
+    raw = np.array([max(0.0, float(regime_weights.get(name, 0.0))) for name in available_regimes], dtype=float)
+    total = float(raw.sum())
+    if total <= 0:
+        return np.repeat(1.0 / len(available_regimes), len(available_regimes))
+    return raw / total
+
+
+def _build_regime_switch_plan(
+    total_steps: int,
+    rng: np.random.Generator,
+    segment_range: tuple[int, int],
+    regime_weights: dict[str, float] | None = None,
+) -> list[tuple[str, int]]:
+    if total_steps < 1:
+        raise ValueError("total_steps must be >= 1")
+
+    seg_low, seg_high = segment_range
+    if seg_low < 1 or seg_high < seg_low:
+        raise ValueError("segment_range must satisfy 1 <= low <= high")
+
+    available_regimes = list(REGIME_LIBRARY.keys())
+    remaining = total_steps
+    prev_regime: str | None = None
+    plan: list[tuple[str, int]] = []
+
+    while remaining > 0:
+        seg_len = int(rng.integers(seg_low, seg_high + 1))
+        seg_len = min(seg_len, remaining)
+
+        candidates = available_regimes
+        if prev_regime is not None and len(available_regimes) > 1:
+            candidates = [name for name in available_regimes if name != prev_regime]
+
+        probs = _normalize_regime_weights(candidates, regime_weights)
+        next_regime = str(rng.choice(candidates, p=probs))
+
+        plan.append((next_regime, seg_len))
+        prev_regime = next_regime
+        remaining -= seg_len
+
+    return plan
 
 
 def generate_episode_returns(
@@ -158,18 +213,96 @@ def generate_episode(
     seed: int = 42,
     regime: str | None = None,
     use_student_t: bool = True,
+    steps_range: tuple[int, int] | None = None,
+    segment_range: tuple[int, int] | None = None,
+    regime_weights: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     selector_rng = np.random.default_rng(seed)
-    chosen_regime = regime or list(REGIME_LIBRARY.keys())[int(selector_rng.integers(0, len(REGIME_LIBRARY)))]
-    returns_seed = int(selector_rng.integers(1, 1_000_000_000))
-    returns_df, meta = generate_episode_returns(
-        regime=chosen_regime,
-        months=months,
-        seed=returns_seed,
-        use_student_t=use_student_t,
+    total_steps = int(months)
+
+    if steps_range is not None:
+        low, high = steps_range
+        if low < 1 or high < low:
+            raise ValueError("steps_range must satisfy 1 <= low <= high")
+        total_steps = int(selector_rng.integers(low, high + 1))
+
+    if regime is not None:
+        returns_seed = int(selector_rng.integers(1, 1_000_000_000))
+        returns_df, meta = generate_episode_returns(
+            regime=regime,
+            months=total_steps,
+            seed=returns_seed,
+            use_student_t=use_student_t,
+        )
+        meta["episode_seed"] = seed
+        meta["returns_seed"] = returns_seed
+        meta["dynamic_regimes"] = False
+        return returns_df, meta
+
+    if segment_range is None:
+        chosen_regime = list(REGIME_LIBRARY.keys())[int(selector_rng.integers(0, len(REGIME_LIBRARY)))]
+        returns_seed = int(selector_rng.integers(1, 1_000_000_000))
+        returns_df, meta = generate_episode_returns(
+            regime=chosen_regime,
+            months=total_steps,
+            seed=returns_seed,
+            use_student_t=use_student_t,
+        )
+        meta["episode_seed"] = seed
+        meta["returns_seed"] = returns_seed
+        meta["dynamic_regimes"] = False
+        return returns_df, meta
+
+    plan = _build_regime_switch_plan(
+        total_steps=total_steps,
+        rng=selector_rng,
+        segment_range=segment_range,
+        regime_weights=regime_weights,
     )
-    meta["episode_seed"] = seed
-    meta["returns_seed"] = returns_seed
+
+    chunk_frames: list[pd.DataFrame] = []
+    phase_path: list[dict[str, Any]] = []
+    month_cursor = 1
+
+    for phase_index, (phase_regime, phase_len) in enumerate(plan, start=1):
+        phase_seed = int(selector_rng.integers(1, 1_000_000_000))
+        phase_df, phase_meta = generate_episode_returns(
+            regime=phase_regime,
+            months=phase_len,
+            seed=phase_seed,
+            use_student_t=use_student_t,
+        )
+        phase_df = phase_df.copy()
+        phase_df["month_index"] = np.arange(month_cursor, month_cursor + phase_len)
+        phase_df["phase_index"] = phase_index
+        phase_df["phase_label"] = f"Фаза {phase_index}"
+        phase_df["phase_step"] = np.arange(1, phase_len + 1)
+        month_cursor += phase_len
+        chunk_frames.append(phase_df)
+
+        phase_path.append(
+            {
+                "phase_index": phase_index,
+                "phase_label": f"Фаза {phase_index}",
+                "regime": phase_regime,
+                "length": phase_len,
+                "seed": phase_seed,
+                "crash_month_in_phase": phase_meta.get("crash_month"),
+            }
+        )
+
+    returns_df = pd.concat(chunk_frames, ignore_index=True)
+    meta = {
+        "regime": "Mixed",
+        "months": total_steps,
+        "seed": seed,
+        "use_student_t": use_student_t,
+        "episode_seed": seed,
+        "dynamic_regimes": True,
+        "segment_range": {"min": int(segment_range[0]), "max": int(segment_range[1])},
+        "regime_weights": regime_weights or {},
+        "regime_path": phase_path,
+    }
     return returns_df, meta
 
 

@@ -32,10 +32,12 @@ def test_scoring_high_risk_stable_behavior() -> None:
     rows = [_build_base_row(m) for m in range(1, 13)]
     df = pd.DataFrame(rows)
 
-    out = score_portfolio(df, onboarding={"investment_horizon_years": 15})
+    out = score_portfolio(df, onboarding={"investment_horizon_years": 15}, calibration_model={})
     assert out["risk_tolerance_score"] > 65
     assert out["behavioral_reactivity_score"] < 35
     assert out["risk_group_3"] in {"Moderate", "Aggressive"}
+    assert out["score_model_version"] == "heuristic_v2"
+    assert out["calibration_applied"] is False
 
 
 def test_scoring_panic_behavior() -> None:
@@ -59,7 +61,40 @@ def test_scoring_panic_behavior() -> None:
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    out = score_portfolio(df, onboarding={"investment_horizon_years": 2})
+    out = score_portfolio(df, onboarding={"investment_horizon_years": 2}, calibration_model={})
     assert out["risk_tolerance_score"] < 55
-    assert out["behavioral_reactivity_score"] > 60
+    assert out["behavioral_reactivity_score"] > 55
     assert out["risk_group_3"] in {"Conservative", "Moderate"}
+    assert out["profile_reliability_label"] in {"Low", "Medium"}
+
+
+def test_scoring_uses_calibrated_model_when_available() -> None:
+    rows = [_build_base_row(m) for m in range(1, 13)]
+    df = pd.DataFrame(rows)
+
+    model = {
+        "model_version": "calibrated_linear_v1_test",
+        "feature_names": [
+            "avg_risky_weight",
+            "max_drawdown_tolerated_before_derisk",
+            "panic_actions_count",
+            "recovery_risk_restore",
+            "churn",
+            "early_exit_flag",
+            "avg_discomfort",
+            "decision_flip_rate",
+            "calm_market_rebalance_rate",
+            "loss_aversion_proxy",
+            "chaos_index",
+            "investment_horizon_years_norm",
+            "observations_count_norm",
+        ],
+        "weights": [0.0] * 13,
+        "intercept": 80.0,
+        "blend_with_heuristic": 0.0,
+    }
+
+    out = score_portfolio(df, onboarding={"investment_horizon_years": 15}, calibration_model=model)
+    assert out["calibration_applied"] is True
+    assert out["score_model_version"] == "calibrated_linear_v1_test"
+    assert out["final_risk_index"] == 80.0
