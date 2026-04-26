@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import inspect
 from datetime import datetime, timezone
 from typing import Any
 
@@ -510,6 +511,24 @@ def _action_label(rebalance: int, go_to_cash: int, reduce_risk: int, end_early: 
     return "Сохранение структуры"
 
 
+def _call_generate_episode_with_compat(cfg: dict[str, Any], seed: int) -> tuple[pd.DataFrame, dict[str, Any]]:
+    base_kwargs: dict[str, Any] = {
+        "months": int(cfg["months"]),
+        "seed": seed,
+        "regime": cfg["regime"],
+        "use_student_t": True,
+    }
+    extra_kwargs: dict[str, Any] = {
+        "steps_range": cfg.get("steps_range"),
+        "segment_range": cfg.get("segment_range"),
+        "regime_weights": cfg.get("regime_weights"),
+    }
+
+    supported_param_names = set(inspect.signature(generate_episode).parameters)
+    filtered_extra_kwargs = {k: v for k, v in extra_kwargs.items() if k in supported_param_names}
+    return generate_episode(**base_kwargs, **filtered_extra_kwargs)
+
+
 def _engagement_hint(
     current_step: int,
     total_steps: int,
@@ -701,15 +720,7 @@ def start_episode(mode_key: str) -> None:
     cfg = MODE_CONFIGS[mode_key]
     seed = int(onboarding["random_seed"])
 
-    returns_df, meta = generate_episode(
-        months=int(cfg["months"]),
-        seed=seed,
-        regime=cfg["regime"],
-        use_student_t=True,
-        steps_range=cfg.get("steps_range"),
-        segment_range=cfg.get("segment_range"),
-        regime_weights=cfg.get("regime_weights"),
-    )
+    returns_df, meta = _call_generate_episode_with_compat(cfg, seed)
 
     meta["mode_key"] = mode_key
     meta["mode_title"] = cfg["title"]

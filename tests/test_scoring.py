@@ -98,3 +98,21 @@ def test_scoring_uses_calibrated_model_when_available() -> None:
     assert out["calibration_applied"] is True
     assert out["score_model_version"] == "calibrated_linear_v1_test"
     assert out["final_risk_index"] == 80.0
+
+
+def test_reliability_decreases_for_short_and_early_exit_paths() -> None:
+    long_rows = [_build_base_row(m) for m in range(1, 13)]
+    long_df = pd.DataFrame(long_rows)
+    long_out = score_portfolio(long_df, onboarding={"investment_horizon_years": 10}, calibration_model={})
+
+    short_rows = []
+    for m in range(1, 5):
+        row = _build_base_row(m)
+        row["end_early"] = 1 if m == 4 else 0
+        row["discomfort_1_5"] = 5
+        short_rows.append(row)
+    short_df = pd.DataFrame(short_rows)
+    short_out = score_portfolio(short_df, onboarding={"investment_horizon_years": 10}, calibration_model={})
+
+    assert short_out["profile_reliability_score"] < long_out["profile_reliability_score"]
+    assert short_out["profile_reliability_label"] in {"Low", "Medium"}
