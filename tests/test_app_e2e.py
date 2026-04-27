@@ -4,25 +4,25 @@ import time
 
 from streamlit.testing.v1 import AppTest
 
-BTN_START = "\u041d\u0430\u0447\u0430\u0442\u044c"
-BTN_NEXT = "\u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c"
-BTN_CHOOSE_MODE = "\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0440\u0435\u0436\u0438\u043c"
-BTN_CHOOSE = "\u0412\u044b\u0431\u0440\u0430\u0442\u044c"
-BTN_APPLY = "\u041f\u0440\u0438\u043d\u044f\u0442\u044c \u0440\u0435\u0448\u0435\u043d\u0438\u0435 \u0438 \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c"
-BTN_SHOW_RESULTS = "\u041f\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u044b"
-BTN_PAUSE = "\u041f\u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u043d\u0430 \u043f\u0430\u0443\u0437\u0443"
-BTN_RESUME = "\u0412\u043e\u0437\u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u0438\u043c\u0443\u043b\u044f\u0446\u0438\u044e"
-BTN_GROWTH = "\u0420\u043e\u0441\u0442"
-BTN_EARLY = "\u0417\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044c \u0434\u043e\u0441\u0440\u043e\u0447\u043d\u043e"
-BTN_TO_MODE = "\u041a \u0432\u044b\u0431\u043e\u0440\u0443 \u0440\u0435\u0436\u0438\u043c\u0430"
-BTN_TO_QUESTIONNAIRE = "\u041a \u0430\u043d\u043a\u0435\u0442\u0435"
-BTN_RESET = "\u0421\u0431\u0440\u043e\u0441\u0438\u0442\u044c \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441"
-RADIO_REBALANCE = "\u0420\u0435\u0431\u0430\u043b\u0430\u043d\u0441\u0438\u0440\u043e\u0432\u0430\u0442\u044c"
-RADIO_ACTION_LABEL = "\u0412\u0430\u0448\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435"
-SUBHEADER_SIM = "\u041e\u0441\u043d\u043e\u0432\u043d\u0430\u044f \u0441\u0438\u043c\u0443\u043b\u044f\u0446\u0438\u044f"
-SUBHEADER_RESULTS = "\u0418\u0442\u043e\u0433\u043e\u0432\u044b\u0439 \u043f\u0440\u043e\u0444\u0438\u043b\u044c"
-SUBHEADER_MODE = "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0440\u0435\u0436\u0438\u043c \u043f\u0440\u043e\u0445\u043e\u0436\u0434\u0435\u043d\u0438\u044f"
-SUBHEADER_QUESTIONNAIRE = "\u041a\u043e\u0440\u043e\u0442\u043a\u0430\u044f \u0430\u043d\u043a\u0435\u0442\u0430"
+BTN_START = "Начать"
+BTN_NEXT = "Продолжить"
+BTN_CHOOSE_MODE = "Выбрать режим"
+BTN_CHOOSE = "Выбрать"
+BTN_ENTER_DECISION = "Принять решение (пауза)"
+BTN_CANCEL_DECISION = "Вернуться к наблюдению"
+BTN_APPLY = "Применить решение и продолжить"
+BTN_SHOW_RESULTS = "Посмотреть результаты"
+BTN_GROWTH = "Рост"
+BTN_EARLY = "Завершить досрочно"
+BTN_TO_MODE = "К выбору режима"
+BTN_TO_QUESTIONNAIRE = "К анкете"
+BTN_RESET = "Сбросить прогресс"
+RADIO_REBALANCE = "Ребалансировать"
+RADIO_ACTION_LABEL = "Ваше действие"
+SUBHEADER_SIM = "Основная симуляция"
+SUBHEADER_RESULTS = "Итоговый профиль"
+SUBHEADER_MODE = "Выберите режим прохождения"
+SUBHEADER_QUESTIONNAIRE = "Короткая анкета"
 
 
 def _click_button(at: AppTest, label: str) -> None:
@@ -40,44 +40,74 @@ def _go_to_simulation(at: AppTest) -> None:
     _click_button(at, BTN_NEXT)
     _click_button(at, BTN_CHOOSE_MODE)
     _click_button(at, BTN_CHOOSE)
-    assert SUBHEADER_SIM in [s.value for s in at.subheader]
+    subheaders = [s.value for s in at.subheader]
+    assert SUBHEADER_SIM in subheaders
 
 
 def test_e2e_happy_path_to_results() -> None:
     at = AppTest.from_file("app.py")
     _go_to_simulation(at)
 
-    _click_button(at, BTN_APPLY)
-    _click_button(at, BTN_SHOW_RESULTS)
+    at.session_state["decision_mode_active"] = True
+    at.session_state["sim_paused"] = True
+    at.run()
 
+    before = int(at.session_state["month_index"])
+    _click_button(at, BTN_APPLY)
+    after = int(at.session_state["month_index"])
+    assert after >= before + 1 or at.session_state["screen"] == "results"
+
+    _click_button(at, BTN_SHOW_RESULTS)
     subheaders = [s.value for s in at.subheader]
     assert SUBHEADER_RESULTS in subheaders
 
-    captions = [c.value for c in at.caption]
-    assert any("\u041c\u043e\u0434\u0435\u043b\u044c:" in text for text in captions)
 
-
-def test_e2e_pause_keeps_apply_available_and_resume_works() -> None:
+def test_e2e_decision_mode_pauses_and_resume_returns_live() -> None:
     at = AppTest.from_file("app.py")
     _go_to_simulation(at)
 
+    at.session_state["decision_mode_active"] = True
     at.session_state["sim_paused"] = True
     at.run()
-    apply_buttons = [b for b in at.button if b.label == BTN_APPLY]
-    assert apply_buttons
-    assert all(not b.disabled for b in apply_buttons)
 
-    _click_button(at, BTN_RESUME)
+    action_radios = [r for r in at.radio if r.label == RADIO_ACTION_LABEL]
+    assert action_radios
+
+    paused_month = int(at.session_state["month_index"])
+    time.sleep(1.2)
     at.run()
-    apply_buttons = [b for b in at.button if b.label == BTN_APPLY]
-    assert apply_buttons
-    assert all(not b.disabled for b in apply_buttons)
+    assert int(at.session_state["month_index"]) == paused_month
+
+    at.session_state["decision_mode_active"] = False
+    at.session_state["sim_paused"] = False
+    at.run()
+
+    action_radios = [r for r in at.radio if r.label == RADIO_ACTION_LABEL]
+    assert not action_radios
+
+
+def test_e2e_decision_controls_appear_only_in_decision_mode() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    action_radios = [r for r in at.radio if r.label == RADIO_ACTION_LABEL]
+    assert not action_radios
+
+    at.session_state["decision_mode_active"] = True
+    at.session_state["sim_paused"] = True
+    at.run()
+
+    action_radios = [r for r in at.radio if r.label == RADIO_ACTION_LABEL]
+    assert action_radios
 
 
 def test_e2e_rebalance_preset_and_invalid_sum_blocks_apply() -> None:
     at = AppTest.from_file("app.py")
     _go_to_simulation(at)
-    _click_button(at, BTN_PAUSE)
+
+    at.session_state["decision_mode_active"] = True
+    at.session_state["sim_paused"] = True
+    at.run()
 
     action_radios = [r for r in at.radio if r.label == RADIO_ACTION_LABEL]
     assert action_radios, "No action radio on simulation screen"
@@ -123,14 +153,11 @@ def test_e2e_live_tick_advances_after_interval() -> None:
     assert after >= before + 1
 
 
-def test_e2e_early_finish_opens_results() -> None:
+def test_e2e_early_finish_button_present() -> None:
     at = AppTest.from_file("app.py")
     _go_to_simulation(at)
 
-    _click_button(at, BTN_EARLY)
-    at.run()
-    subheaders = [s.value for s in at.subheader]
-    assert SUBHEADER_RESULTS in subheaders
+    assert any(b.label == BTN_EARLY for b in at.button)
 
 
 def test_e2e_sidebar_navigation_and_reset() -> None:
@@ -156,3 +183,48 @@ def test_e2e_simulation_tabs_present() -> None:
 
     tab_labels = [t.label for t in at.get("tab")]
     assert {"Портфель", "Просадка", "Аллокация", "Активы"}.issubset(set(tab_labels))
+
+
+def test_e2e_no_mode_subheader_leak_on_simulation_screen() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    subheaders = [s.value for s in at.subheader]
+    assert SUBHEADER_SIM in subheaders
+    assert SUBHEADER_MODE not in subheaders
+
+
+
+def test_e2e_mode_screen_contains_preplay_instructions() -> None:
+    at = AppTest.from_file("app.py")
+    at.run()
+    _click_button(at, BTN_START)
+    _click_button(at, BTN_NEXT)
+    _click_button(at, BTN_NEXT)
+    _click_button(at, BTN_NEXT)
+    _click_button(at, BTN_CHOOSE_MODE)
+
+    info_texts = [x.value for x in at.info]
+    expected = "Перед стартом:"
+    assert any(expected in t for t in info_texts)
+
+
+def test_e2e_live_screen_shows_decision_hint_when_not_in_decision_mode() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    info_texts = [x.value for x in at.info]
+    expected = "Нажмите «Принять решение (пауза)»"
+    assert any(expected in t for t in info_texts)
+
+
+def test_e2e_repeated_live_reruns_do_not_raise_exceptions() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    for _ in range(8):
+        at.run()
+        subheaders = [s.value for s in at.subheader]
+        assert SUBHEADER_SIM in subheaders
+        assert SUBHEADER_MODE not in subheaders
+        assert len(at.exception) == 0

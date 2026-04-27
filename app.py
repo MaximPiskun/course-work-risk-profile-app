@@ -189,6 +189,12 @@ def inject_styles() -> None:
             .block-container {padding-top: 0.5rem; padding-bottom: 1.2rem;}
             .app-hero, .soft-card {padding: 0.85rem 0.9rem; border-radius: 12px;}
             .engagement-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
+            .stTabs [data-baseweb="tab-list"] {flex-wrap: wrap;}
+            .stTabs [data-baseweb="tab"] {padding: 0.28rem 0.6rem; min-height: 34px;}
+            [data-testid="stMetricValue"] {font-size: 1.05rem;}
+            [data-testid="stMetricLabel"] {font-size: 0.76rem;}
+            .stDataFrame [role="grid"] {font-size: 0.84rem;}
+            .stButton > button {min-height: 42px;}
           }
         </style>
         """,
@@ -224,6 +230,13 @@ def initialize_state() -> None:
         "ended_early": False,
         "flash_message": "",
         "sim_paused": False,
+        "decision_mode_active": False,
+        "sim_action": "Оставить текущую структуру",
+        "sim_reduce_pct": 20,
+        "sim_uncomfortable": 3,
+        "sim_bonds_pct": 35,
+        "sim_stocks_pct": 30,
+        "sim_gold_pct": 5,
         "sim_rebalance_preset": "Сбалансированно",
         "storage_enabled": True,
         "storage_error": "",
@@ -260,6 +273,7 @@ def hard_reset() -> None:
             "ended_early",
             "flash_message",
             "sim_paused",
+            "decision_mode_active",
             "sim_rebalance_preset",
             "run_session_id",
             "final_scores_persisted",
@@ -763,6 +777,7 @@ def start_episode(mode_key: str) -> None:
     st.session_state.run_session_id = st.session_state.episode_id
     st.session_state.live_tick_seconds = 1.0
     st.session_state.live_last_advance_at = float(time.monotonic())
+    st.session_state.decision_mode_active = False
     phase_count = len(meta.get("regime_path", []))
     if phase_count > 0:
         st.session_state.flash_message = f"Сценарий собран: {len(returns_df)} тиков, {phase_count} фаз."
@@ -795,10 +810,7 @@ def _seconds_until_next_tick() -> float:
 
 
 def _rerun_simulation_view() -> None:
-    try:
-        st.rerun(scope="fragment")
-    except Exception:
-        st.rerun()
+    st.rerun()
 
 
 def _apply_market_tick(
@@ -875,6 +887,8 @@ def _maybe_run_auto_tick(
     phase_label: str,
 ) -> bool:
     if bool(st.session_state.get("sim_paused", False)):
+        return False
+    if bool(st.session_state.get("decision_mode_active", False)):
         return False
     if month_idx >= total_steps:
         return False
@@ -1070,6 +1084,15 @@ def render_mode_selection() -> None:
     st.markdown('<div class="soft-card">', unsafe_allow_html=True)
     st.subheader("Выберите режим прохождения")
     st.caption("Рынок идет фазами: режим и длина фазы выбираются случайно, затем переключаются снова.")
+    st.info(
+        "Перед стартом: графики и метрики обновляются в live-режиме. "
+        "Чтобы принять решение, нажмите «Принять решение (пауза)», выберите действие и подтвердите его."
+    )
+    with st.expander("Памятка по управлению"):
+        st.write("1. Наблюдайте live-графики портфеля и активов.")
+        st.write("2. Нажмите `Принять решение (пауза)`, когда хотите вмешаться.")
+        st.write("3. Выберите действие и подтвердите `Применить решение и продолжить`.")
+        st.write("4. Если хотите просто наблюдать дальше — `Вернуться к наблюдению`.")
 
     cols = st.columns(3)
     for col, mode_key in zip(cols, ["standard", "stress", "quick"]):
@@ -1094,6 +1117,32 @@ def render_mode_selection() -> None:
 
 
 @st.fragment(run_every=1.0)
+def _simulation_heartbeat() -> None:
+    if st.session_state.get("screen") != "simulation":
+        return
+    returns_df: pd.DataFrame | None = st.session_state.get("episode_returns")
+    if returns_df is None or returns_df.empty:
+        return
+
+    month_idx = int(st.session_state.get("month_index", 0))
+    total_steps = int(st.session_state.get("simulation_months", 0))
+    if month_idx >= total_steps:
+        return
+
+    current_market = returns_df.iloc[month_idx]
+    regime = str(current_market.get("regime", "Sideways"))
+    phase_label = str(current_market.get("phase_label", ""))
+
+    if _maybe_run_auto_tick(
+        month_idx=month_idx,
+        total_steps=total_steps,
+        returns_df=returns_df,
+        regime=regime,
+        phase_label=phase_label,
+    ):
+        _rerun_simulation_view()
+
+
 def render_simulation() -> None:
     if st.session_state.onboarding_profile is None or st.session_state.episode_returns is None:
         st.warning("Сначала заполните анкету и выберите режим.")
@@ -1115,14 +1164,7 @@ def render_simulation() -> None:
     phase_label = str(current_market.get("phase_label", ""))
     phase_step = int(current_market.get("phase_step", month_idx + 1))
 
-    if _maybe_run_auto_tick(
-        month_idx=month_idx,
-        total_steps=total_steps,
-        returns_df=returns_df,
-        regime=regime,
-        phase_label=phase_label,
-    ):
-        _rerun_simulation_view()
+    _simulation_heartbeat()
 
     if st.session_state.flash_message:
         st.success(st.session_state.flash_message)
@@ -1139,6 +1181,8 @@ def render_simulation() -> None:
     phase_label = str(current_market.get("phase_label", ""))
     phase_step = int(current_market.get("phase_step", month_idx + 1))
     regime_view = REGIME_DESCRIPTIONS.get(regime, {"label": regime, "hint": "Смешанный режим."})
+    if not bool(st.session_state.get("decision_mode_active", False)) and bool(st.session_state.get("sim_paused", False)):
+        st.session_state.sim_paused = False
 
     current_values = st.session_state.portfolio_values
     current_value = float(current_values[-1])
@@ -1205,12 +1249,17 @@ def render_simulation() -> None:
 
     st.caption(
         "Live-режим: рынок движется автоматически в реальном времени. "
-        "Кнопка паузы останавливает тики и дает время на решение."
+        "Нажмите «Принять решение (пауза)», чтобы зафиксировать графики и выбрать действие."
     )
     st.caption(
         "Нейтральное раскрытие риска: результаты симуляции не гарантируют будущую доходность. "
         "Снижение риска может уменьшать волатильность, но фиксирует часть убытка."
     )
+    if month_idx == 0 and not st.session_state.logs:
+        st.info(
+            "Совет по началу: дайте рынку пройти несколько тиков, затем включайте режим решения, "
+            "чтобы сравнить эффект разных действий на графиках."
+        )
 
     phase_path = st.session_state.episode_meta.get("regime_path", [])
     if phase_path:
@@ -1223,21 +1272,30 @@ def render_simulation() -> None:
 
     with decision_col:
         st.markdown("#### A. Панель решения")
-        st.caption("Рынок идет live-тиками. Для вдумчивого выбора поставьте симуляцию на паузу.")
-        pause_col, _ = st.columns([1.0, 1.0])
-        if st.session_state.sim_paused:
-            if pause_col.button("Возобновить симуляцию", width="stretch"):
+        decision_mode_active = bool(st.session_state.get("decision_mode_active", False))
+        st.caption("Ключевая механика: сначала включаете режим решения, затем применяете действие.")
+
+        c_decision, c_early = st.columns(2)
+        if decision_mode_active:
+            if c_decision.button("Вернуться к наблюдению", width="stretch"):
+                st.session_state.decision_mode_active = False
                 st.session_state.sim_paused = False
                 st.session_state.live_last_advance_at = float(time.monotonic())
-                st.session_state.flash_message = "Пауза снята. Live-движение продолжено."
+                st.session_state.flash_message = "Режим решения выключен. Live-движение продолжено."
                 st.rerun()
-            st.warning("Симуляция на паузе: период не продвигается, можно спокойно настроить решение.")
         else:
-            if pause_col.button("Поставить на паузу", width="stretch"):
+            if c_decision.button("Принять решение (пауза)", type="primary", width="stretch"):
+                st.session_state.decision_mode_active = True
                 st.session_state.sim_paused = True
-                st.session_state.flash_message = "Симуляция поставлена на паузу."
+                st.session_state.flash_message = "Режим решения включен: рынок и графики поставлены на паузу."
                 st.rerun()
-            st.caption("Без паузы следующий тик произойдет автоматически.")
+
+        early_clicked = c_early.button("Завершить досрочно", width="stretch")
+
+        if decision_mode_active:
+            st.warning("Режим решения активен: тики не идут, графики зафиксированы.")
+        else:
+            st.caption("Сейчас идет наблюдение: рынок обновляется автоматически.")
 
         cw = st.session_state.current_weights
         st.write("Текущая структура портфеля:")
@@ -1256,59 +1314,7 @@ def render_simulation() -> None:
             0.1,
             key="live_tick_seconds",
         )
-
-        action = st.radio(
-            "Ваше действие",
-            ["Оставить текущую структуру", "Ребалансировать", "Снизить риск на X%", "Пауза: перейти в кэш"],
-            key="sim_action",
-        )
-
-        rebalance_total_valid = True
-        if action == "Ребалансировать":
-            st.caption("Быстрые пресеты")
-            p1, p2, p3 = st.columns(3)
-            if p1.button("Консервативно", key=f"preset_cons_{month_idx}", width="stretch"):
-                _apply_rebalance_preset("Консервативно")
-                st.rerun()
-            if p2.button("Сбаланс.", key=f"preset_bal_{month_idx}", width="stretch"):
-                _apply_rebalance_preset("Сбалансированно")
-                st.rerun()
-            if p3.button("Рост", key=f"preset_growth_{month_idx}", width="stretch"):
-                _apply_rebalance_preset("Рост")
-                st.rerun()
-
-            if "sim_bonds_pct" not in st.session_state:
-                st.session_state.sim_bonds_pct = int(round(cw["Bonds"] * 100))
-            if "sim_stocks_pct" not in st.session_state:
-                st.session_state.sim_stocks_pct = int(round(cw["Stocks"] * 100))
-            if "sim_gold_pct" not in st.session_state:
-                st.session_state.sim_gold_pct = int(round(cw["Gold"] * 100))
-
-            b = st.slider("Bonds, %", 0, 100, int(st.session_state.sim_bonds_pct), key="sim_bonds_pct")
-            s = st.slider("Stocks, %", 0, 100, int(st.session_state.sim_stocks_pct), key="sim_stocks_pct")
-            g = st.slider("Gold, %", 0, 100, int(st.session_state.sim_gold_pct), key="sim_gold_pct")
-            total = b + s + g
-            if total <= 100:
-                st.info(f"Cash автоматически: {100 - total}%")
-            else:
-                rebalance_total_valid = False
-                st.warning("Сумма Bonds + Stocks + Gold должна быть <= 100%.")
-
-        reduce_pct = st.slider("Размер снижения риска, %", 5, 60, 20, 5, key="sim_reduce_pct")
         discomfort = st.slider("Насколько вам сейчас некомфортно?", 1, 5, 3, key="sim_uncomfortable")
-
-        c_apply, c_early = st.columns(2)
-        apply_disabled = action == "Ребалансировать" and not rebalance_total_valid
-        apply_clicked = c_apply.button(
-            "Принять решение и продолжить",
-            type="primary",
-            width="stretch",
-            disabled=apply_disabled,
-        )
-        early_clicked = c_early.button(
-            "Завершить досрочно",
-            width="stretch",
-        )
 
         if early_clicked:
             event_data = {
@@ -1345,51 +1351,104 @@ def render_simulation() -> None:
             st.session_state.flash_message = "Симуляция завершена досрочно."
             st.rerun()
 
-        if apply_clicked:
-            rebalance = 0
-            go_to_cash = 0
-            reduce_risk_flag = 0
-
-            if action == "Оставить текущую структуру":
-                chosen_w = dict(cw)
-            elif action == "Ребалансировать":
-                b = int(st.session_state.sim_bonds_pct)
-                s = int(st.session_state.sim_stocks_pct)
-                g = int(st.session_state.sim_gold_pct)
-                total = b + s + g
-                if total > 100:
-                    st.error("Невозможно сохранить: сумма Bonds + Stocks + Gold должна быть <= 100%.")
-                    st.stop()
-                chosen_w = _normalize_weights({"Cash": (100 - total) / 100, "Bonds": b / 100, "Stocks": s / 100, "Gold": g / 100})
-                rebalance = 1
-            elif action == "Снизить риск на X%":
-                chosen_w = _reduce_risk(cw, float(st.session_state.sim_reduce_pct) / 100.0)
-                reduce_risk_flag = 1
-            else:
-                chosen_w = {"Cash": 1.0, "Bonds": 0.0, "Stocks": 0.0, "Gold": 0.0}
-                go_to_cash = 1
-
-            _apply_market_tick(
-                month_idx=month_idx,
-                returns_df=returns_df,
-                regime=regime,
-                phase_label=phase_label,
-                chosen_w=chosen_w,
-                discomfort=int(discomfort),
-                rebalance=rebalance,
-                go_to_cash=go_to_cash,
-                reduce_risk_flag=reduce_risk_flag,
-                action_label=_action_label(rebalance, go_to_cash, reduce_risk_flag, 0),
-                decision_origin="manual",
+        if decision_mode_active:
+            action = st.radio(
+                "Ваше действие",
+                ["Оставить текущую структуру", "Ребалансировать", "Снизить риск на X%", "Пауза: перейти в кэш"],
+                key="sim_action",
             )
 
-            if st.session_state.month_index >= total_steps:
-                st.session_state.screen = "results"
-                st.session_state.completed = True
-                st.session_state.flash_message = "Симуляция завершена, можно перейти к результатам."
-            else:
-                st.session_state.flash_message = "Решение применено. Live-симуляция продолжается."
-            st.rerun()
+            rebalance_total_valid = True
+            if action == "Ребалансировать":
+                st.caption("Быстрые пресеты")
+                p1, p2, p3 = st.columns(3)
+                if p1.button("Консервативно", key=f"preset_cons_{month_idx}", width="stretch"):
+                    _apply_rebalance_preset("Консервативно")
+                    st.rerun()
+                if p2.button("Сбаланс.", key=f"preset_bal_{month_idx}", width="stretch"):
+                    _apply_rebalance_preset("Сбалансированно")
+                    st.rerun()
+                if p3.button("Рост", key=f"preset_growth_{month_idx}", width="stretch"):
+                    _apply_rebalance_preset("Рост")
+                    st.rerun()
+
+                if "sim_bonds_pct" not in st.session_state:
+                    st.session_state.sim_bonds_pct = int(round(cw["Bonds"] * 100))
+                if "sim_stocks_pct" not in st.session_state:
+                    st.session_state.sim_stocks_pct = int(round(cw["Stocks"] * 100))
+                if "sim_gold_pct" not in st.session_state:
+                    st.session_state.sim_gold_pct = int(round(cw["Gold"] * 100))
+
+                b = st.slider("Bonds, %", 0, 100, int(st.session_state.sim_bonds_pct), key="sim_bonds_pct")
+                s = st.slider("Stocks, %", 0, 100, int(st.session_state.sim_stocks_pct), key="sim_stocks_pct")
+                g = st.slider("Gold, %", 0, 100, int(st.session_state.sim_gold_pct), key="sim_gold_pct")
+                total = b + s + g
+                if total <= 100:
+                    st.info(f"Cash автоматически: {100 - total}%")
+                else:
+                    rebalance_total_valid = False
+                    st.warning("Сумма Bonds + Stocks + Gold должна быть <= 100%.")
+
+            st.slider("Размер снижения риска, %", 5, 60, 20, 5, key="sim_reduce_pct")
+
+            apply_disabled = action == "Ребалансировать" and not rebalance_total_valid
+            apply_clicked = st.button(
+                "Применить решение и продолжить",
+                type="primary",
+                width="stretch",
+                disabled=apply_disabled,
+            )
+
+            if apply_clicked:
+                rebalance = 0
+                go_to_cash = 0
+                reduce_risk_flag = 0
+
+                if action == "Оставить текущую структуру":
+                    chosen_w = dict(cw)
+                elif action == "Ребалансировать":
+                    b = int(st.session_state.sim_bonds_pct)
+                    s = int(st.session_state.sim_stocks_pct)
+                    g = int(st.session_state.sim_gold_pct)
+                    total = b + s + g
+                    if total > 100:
+                        st.error("Невозможно сохранить: сумма Bonds + Stocks + Gold должна быть <= 100%.")
+                        st.stop()
+                    chosen_w = _normalize_weights({"Cash": (100 - total) / 100, "Bonds": b / 100, "Stocks": s / 100, "Gold": g / 100})
+                    rebalance = 1
+                elif action == "Снизить риск на X%":
+                    chosen_w = _reduce_risk(cw, float(st.session_state.sim_reduce_pct) / 100.0)
+                    reduce_risk_flag = 1
+                else:
+                    chosen_w = {"Cash": 1.0, "Bonds": 0.0, "Stocks": 0.0, "Gold": 0.0}
+                    go_to_cash = 1
+
+                _apply_market_tick(
+                    month_idx=month_idx,
+                    returns_df=returns_df,
+                    regime=regime,
+                    phase_label=phase_label,
+                    chosen_w=chosen_w,
+                    discomfort=int(discomfort),
+                    rebalance=rebalance,
+                    go_to_cash=go_to_cash,
+                    reduce_risk_flag=reduce_risk_flag,
+                    action_label=_action_label(rebalance, go_to_cash, reduce_risk_flag, 0),
+                    decision_origin="manual",
+                )
+
+                st.session_state.decision_mode_active = False
+                st.session_state.sim_paused = False
+
+                if st.session_state.month_index >= total_steps:
+                    st.session_state.screen = "results"
+                    st.session_state.completed = True
+                    st.session_state.flash_message = "Симуляция завершена, можно перейти к результатам."
+                else:
+                    st.session_state.flash_message = "Решение применено. Live-симуляция продолжается."
+                st.rerun()
+        else:
+            st.info("Нажмите «Принять решение (пауза)», чтобы выбрать действие.")
 
     with context_col:
         st.markdown("#### B. Рыночный контекст")
