@@ -185,9 +185,61 @@ def inject_styles() -> None:
             background: linear-gradient(180deg, var(--brand) 0%, var(--brand-strong) 100%) !important;
             border-color: var(--brand-strong) !important;
           }
+          .sim-sticky-panel {
+            position: sticky;
+            top: 0.35rem;
+            z-index: 30;
+            border: 1px solid #c8dbf2;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(6px);
+            padding: 0.55rem 0.65rem;
+            margin: 0.3rem 0 0.8rem 0;
+          }
+          .sim-sticky-label {
+            color: var(--text-muted);
+            font-size: 0.72rem;
+            line-height: 1.2;
+          }
+          .sim-sticky-value {
+            font-family: "IBM Plex Mono", Consolas, monospace;
+            font-size: 0.92rem;
+            font-weight: 600;
+            margin-top: 0.05rem;
+          }
           @media (max-width: 900px) {
             .block-container {padding-top: 0.5rem; padding-bottom: 1.2rem;}
             .app-hero, .soft-card {padding: 0.85rem 0.9rem; border-radius: 12px;}
+            .sim-sticky-panel {top: 0.2rem; padding: 0.5rem 0.55rem;}
+            .mode-cards-grid [data-testid="stHorizontalBlock"],
+            .sim-main-grid [data-testid="stHorizontalBlock"],
+            .sim-metrics-grid [data-testid="stHorizontalBlock"],
+            .sim-sticky-panel [data-testid="stHorizontalBlock"] {
+              flex-wrap: wrap;
+              gap: 0.45rem;
+            }
+            .mode-cards-grid [data-testid="stHorizontalBlock"] > div,
+            .sim-main-grid [data-testid="stHorizontalBlock"] > div {
+              min-width: 100% !important;
+              flex: 1 1 100% !important;
+            }
+            .sim-metrics-grid [data-testid="stHorizontalBlock"] > div {
+              min-width: calc(50% - 0.3rem) !important;
+              flex: 1 1 calc(50% - 0.3rem) !important;
+            }
+            .sim-metrics-grid [data-testid="stHorizontalBlock"] > div:last-child {
+              min-width: 100% !important;
+              flex: 1 1 100% !important;
+            }
+            .sim-sticky-panel [data-testid="stHorizontalBlock"] > div {
+              min-width: calc(50% - 0.3rem) !important;
+              flex: 1 1 calc(50% - 0.3rem) !important;
+            }
+            .sim-sticky-panel [data-testid="stHorizontalBlock"] > div:last-child {
+              min-width: 100% !important;
+              flex: 1 1 100% !important;
+            }
+            .stDataFrame {overflow-x: auto;}
             .engagement-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
             .stTabs [data-baseweb="tab-list"] {flex-wrap: wrap;}
             .stTabs [data-baseweb="tab"] {padding: 0.28rem 0.6rem; min-height: 34px;}
@@ -400,10 +452,38 @@ def _vol_estimate(returns: list[float], window: int = 6) -> float:
         return 0.0
     return float(pd.Series(returns[-window:]).std(ddof=1) * np.sqrt(12))
 
-def _build_value_plot(values: list[float]) -> plt.Figure:
+
+def _decision_marker_points(log_df: pd.DataFrame, values: list[float]) -> tuple[np.ndarray, np.ndarray]:
+    if log_df.empty or "month_index" not in log_df.columns:
+        return np.array([], dtype=int), np.array([], dtype=float)
+
+    points = log_df.copy()
+    if "decision_origin" in points.columns:
+        points = points[points["decision_origin"] == "manual"]
+
+    marker_x: list[int] = []
+    marker_y: list[float] = []
+    for raw_tick in points["month_index"].tolist():
+        try:
+            tick = int(raw_tick)
+        except Exception:
+            continue
+        if 0 <= tick < len(values):
+            marker_x.append(tick)
+            marker_y.append(float(values[tick]))
+
+    return np.array(marker_x, dtype=int), np.array(marker_y, dtype=float)
+
+
+def _build_value_plot(values: list[float], log_df: pd.DataFrame | None = None) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(8.8, 3.1))
     x = np.arange(len(values))
-    ax.plot(x, values, linewidth=2.0, color="#2a5a9e")
+    ax.plot(x, values, linewidth=2.0, color="#2a5a9e", label="Портфель")
+    if log_df is not None and not log_df.empty:
+        marker_x, marker_y = _decision_marker_points(log_df, values)
+        if marker_x.size:
+            ax.scatter(marker_x, marker_y, color="#d7263d", s=28, zorder=4, label="Ручное решение")
+            ax.legend(loc="best", fontsize=8)
     ax.set_title("Траектория стоимости портфеля")
     ax.set_xlabel("Тик")
     ax.set_ylabel("Стоимость")
@@ -412,14 +492,19 @@ def _build_value_plot(values: list[float]) -> plt.Figure:
     return fig
 
 
-def _build_drawdown_plot(values: list[float]) -> plt.Figure:
+def _build_drawdown_plot(values: list[float], log_df: pd.DataFrame | None = None) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(8.8, 3.1))
     arr = np.array(values, dtype=float)
     peak = np.maximum.accumulate(arr)
     dd = arr / peak - 1.0
     x = np.arange(len(values))
     ax.fill_between(x, dd, 0, alpha=0.25, color="#9db7e8")
-    ax.plot(x, dd, linewidth=1.8, color="#2a5a9e")
+    ax.plot(x, dd, linewidth=1.8, color="#2a5a9e", label="Просадка")
+    if log_df is not None and not log_df.empty:
+        marker_x, _ = _decision_marker_points(log_df, values)
+        if marker_x.size:
+            ax.scatter(marker_x, dd[marker_x], color="#d7263d", s=28, zorder=4, label="Ручное решение")
+            ax.legend(loc="best", fontsize=8)
     ax.set_title("Просадка")
     ax.set_xlabel("Тик")
     ax.set_ylabel("Drawdown")
@@ -795,9 +880,7 @@ def start_episode(mode_key: str) -> None:
 
 def _tick_interval_seconds() -> float:
     raw_value = float(st.session_state.get("live_tick_seconds", 1.0) or 1.0)
-    tick_seconds = float(np.clip(raw_value, 0.5, 2.0))
-    st.session_state.live_tick_seconds = tick_seconds
-    return tick_seconds
+    return float(np.clip(raw_value, 0.5, 2.0))
 
 
 def _seconds_until_next_tick() -> float:
@@ -1084,6 +1167,10 @@ def render_mode_selection() -> None:
     st.markdown('<div class="soft-card">', unsafe_allow_html=True)
     st.subheader("Выберите режим прохождения")
     st.caption("Рынок идет фазами: режим и длина фазы выбираются случайно, затем переключаются снова.")
+    st.markdown("#### Быстрый бриф (20-30 секунд)")
+    st.write("1. Сначала наблюдайте live-движение 10-20 тиков, не спешите с первым действием.")
+    st.write("2. Когда хотите вмешаться, нажмите `Принять решение (пауза)` и спокойно выберите действие.")
+    st.write("3. Ориентир по качественному прохождению: меньше хаотичных переключений и больше последовательности.")
     st.info(
         "Перед стартом: графики и метрики обновляются в live-режиме. "
         "Чтобы принять решение, нажмите «Принять решение (пауза)», выберите действие и подтвердите его."
@@ -1094,6 +1181,7 @@ def render_mode_selection() -> None:
         st.write("3. Выберите действие и подтвердите `Применить решение и продолжить`.")
         st.write("4. Если хотите просто наблюдать дальше — `Вернуться к наблюдению`.")
 
+    st.markdown('<div class="mode-cards-grid">', unsafe_allow_html=True)
     cols = st.columns(3)
     for col, mode_key in zip(cols, ["standard", "stress", "quick"]):
         cfg = MODE_CONFIGS[mode_key]
@@ -1107,6 +1195,7 @@ def render_mode_selection() -> None:
                 start_episode(mode_key)
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
     if st.button("Назад", width="stretch"):
@@ -1164,8 +1253,6 @@ def render_simulation() -> None:
     phase_label = str(current_market.get("phase_label", ""))
     phase_step = int(current_market.get("phase_step", month_idx + 1))
 
-    _simulation_heartbeat()
-
     if st.session_state.flash_message:
         st.success(st.session_state.flash_message)
         st.session_state.flash_message = ""
@@ -1183,6 +1270,7 @@ def render_simulation() -> None:
     regime_view = REGIME_DESCRIPTIONS.get(regime, {"label": regime, "hint": "Смешанный режим."})
     if not bool(st.session_state.get("decision_mode_active", False)) and bool(st.session_state.get("sim_paused", False)):
         st.session_state.sim_paused = False
+    decision_mode_active = bool(st.session_state.get("decision_mode_active", False))
 
     current_values = st.session_state.portfolio_values
     current_value = float(current_values[-1])
@@ -1237,6 +1325,43 @@ def render_simulation() -> None:
         unsafe_allow_html=True,
     )
 
+    status_text = "Пауза: режим решения" if decision_mode_active else "Live-наблюдение"
+    tick_text = "Пауза" if st.session_state.sim_paused else f"{next_tick_seconds:.1f} с"
+    st.markdown('<div class="sim-sticky-panel">', unsafe_allow_html=True)
+    sticky_cols = st.columns([1.2, 1.0, 1.0, 1.4], gap="small")
+    sticky_cols[0].markdown(
+        f"<div class='sim-sticky-label'>Статус</div><div class='sim-sticky-value'>{status_text}</div>",
+        unsafe_allow_html=True,
+    )
+    sticky_cols[1].markdown(
+        f"<div class='sim-sticky-label'>До тика</div><div class='sim-sticky-value'>{tick_text}</div>",
+        unsafe_allow_html=True,
+    )
+    sticky_cols[2].markdown(
+        f"<div class='sim-sticky-label'>Режим рынка</div><div class='sim-sticky-value'>{regime_view['label']}</div>",
+        unsafe_allow_html=True,
+    )
+    if decision_mode_active:
+        if sticky_cols[3].button("Вернуться к наблюдению", key="sticky_resume_live", width="stretch"):
+            st.session_state.decision_mode_active = False
+            st.session_state.sim_paused = False
+            st.session_state.live_last_advance_at = float(time.monotonic())
+            st.session_state.flash_message = "Режим решения выключен. Live-движение продолжено."
+            st.rerun()
+    else:
+        if sticky_cols[3].button(
+            "Принять решение (пауза)",
+            key="sticky_enter_decision",
+            type="primary",
+            width="stretch",
+        ):
+            st.session_state.decision_mode_active = True
+            st.session_state.sim_paused = True
+            st.session_state.flash_message = "Режим решения включен: рынок и графики поставлены на паузу."
+            st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="sim-metrics-grid">', unsafe_allow_html=True)
     row1 = st.columns(3)
     row1[0].metric("Тик", f"{month_idx + 1}/{total_steps}")
     row1[1].metric("До следующего тика", "Пауза" if st.session_state.sim_paused else f"{next_tick_seconds:.1f} с")
@@ -1246,6 +1371,7 @@ def render_simulation() -> None:
     row2[0].metric("Доходность с начала", f"{cumulative_return:.2%}")
     row2[1].metric("Текущая просадка", f"{current_dd:.2%}")
     row2[2].metric("Макс. просадка", f"{max_dd:.2%}")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     st.caption(
         "Live-режим: рынок движется автоматически в реальном времени. "
@@ -1268,29 +1394,14 @@ def render_simulation() -> None:
             phase_df.columns = ["Фаза", "Рыночный режим", "Тиков в фазе"]
             st.dataframe(phase_df, width="stretch", hide_index=True)
 
+    st.markdown('<div class="sim-main-grid">', unsafe_allow_html=True)
     decision_col, context_col = st.columns([1.0, 1.45], gap="large")
 
     with decision_col:
         st.markdown("#### A. Панель решения")
-        decision_mode_active = bool(st.session_state.get("decision_mode_active", False))
-        st.caption("Ключевая механика: сначала включаете режим решения, затем применяете действие.")
+        st.caption("Включение/выключение режима решения находится в закрепленной панели сверху.")
 
-        c_decision, c_early = st.columns(2)
-        if decision_mode_active:
-            if c_decision.button("Вернуться к наблюдению", width="stretch"):
-                st.session_state.decision_mode_active = False
-                st.session_state.sim_paused = False
-                st.session_state.live_last_advance_at = float(time.monotonic())
-                st.session_state.flash_message = "Режим решения выключен. Live-движение продолжено."
-                st.rerun()
-        else:
-            if c_decision.button("Принять решение (пауза)", type="primary", width="stretch"):
-                st.session_state.decision_mode_active = True
-                st.session_state.sim_paused = True
-                st.session_state.flash_message = "Режим решения включен: рынок и графики поставлены на паузу."
-                st.rerun()
-
-        early_clicked = c_early.button("Завершить досрочно", width="stretch")
+        early_clicked = st.button("Завершить досрочно", width="stretch")
 
         if decision_mode_active:
             st.warning("Режим решения активен: тики не идут, графики зафиксированы.")
@@ -1354,7 +1465,7 @@ def render_simulation() -> None:
         if decision_mode_active:
             action = st.radio(
                 "Ваше действие",
-                ["Оставить текущую структуру", "Ребалансировать", "Снизить риск на X%", "Пауза: перейти в кэш"],
+                ["Оставить текущую структуру", "Ребалансировать", "Снизить риск на X%", "Перейти в кэш"],
                 key="sim_action",
             )
 
@@ -1450,6 +1561,8 @@ def render_simulation() -> None:
         else:
             st.info("Нажмите «Принять решение (пауза)», чтобы выбрать действие.")
 
+    _simulation_heartbeat()
+
     with context_col:
         st.markdown("#### B. Рыночный контекст")
         live_snapshot = pd.DataFrame(
@@ -1497,14 +1610,15 @@ def render_simulation() -> None:
 
         asset_index_df = _build_asset_index_df(returns_df, upto_month=month_idx)
         asset_snapshot = _build_asset_snapshot(asset_index_df)
+        sim_log_df = pd.DataFrame(st.session_state.logs)
 
         t1, t2, t3, t4 = st.tabs(["Портфель", "Просадка", "Аллокация", "Активы"])
         with t1:
-            st.pyplot(_build_value_plot(st.session_state.portfolio_values), clear_figure=True)
+            st.pyplot(_build_value_plot(st.session_state.portfolio_values, log_df=sim_log_df), clear_figure=True)
         with t2:
-            st.pyplot(_build_drawdown_plot(st.session_state.portfolio_values), clear_figure=True)
+            st.pyplot(_build_drawdown_plot(st.session_state.portfolio_values, log_df=sim_log_df), clear_figure=True)
         with t3:
-            st.pyplot(_build_allocation_plot(pd.DataFrame(st.session_state.logs)), clear_figure=True)
+            st.pyplot(_build_allocation_plot(sim_log_df), clear_figure=True)
         with t4:
             st.pyplot(
                 _build_asset_paths_plot(asset_index_df, "Динамика активов: где были раньше и где сейчас"),
@@ -1512,7 +1626,11 @@ def render_simulation() -> None:
             )
             st.dataframe(asset_snapshot, width="stretch", hide_index=True)
             st.caption("Индексы нормированы: старт каждого актива = 100.")
+        if not sim_log_df.empty and "decision_origin" in sim_log_df.columns:
+            if bool((sim_log_df["decision_origin"] == "manual").any()):
+                st.caption("Красные точки на графиках «Портфель» и «Просадка» — моменты ваших ручных решений.")
 
+    st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("---")
     st.markdown("#### C. Лента событий и решений")
     if not st.session_state.logs:
@@ -1627,8 +1745,8 @@ def render_results() -> None:
         st.write(f"Что делать: {card['advice']}")
 
     st.markdown("### Графики итогов")
-    st.pyplot(_build_value_plot(st.session_state.portfolio_values), clear_figure=True)
-    st.pyplot(_build_drawdown_plot(st.session_state.portfolio_values), clear_figure=True)
+    st.pyplot(_build_value_plot(st.session_state.portfolio_values, log_df=log_df), clear_figure=True)
+    st.pyplot(_build_drawdown_plot(st.session_state.portfolio_values, log_df=log_df), clear_figure=True)
 
     returns_df: pd.DataFrame | None = st.session_state.episode_returns
     if returns_df is not None and not returns_df.empty:

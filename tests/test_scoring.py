@@ -116,3 +116,106 @@ def test_reliability_decreases_for_short_and_early_exit_paths() -> None:
 
     assert short_out["profile_reliability_score"] < long_out["profile_reliability_score"]
     assert short_out["profile_reliability_label"] in {"Low", "Medium"}
+
+
+def test_scoring_extreme_profiles_are_reachable() -> None:
+    aggressive_rows = []
+    for m in range(1, 40):
+        aggressive_rows.append(
+            {
+                "month_index": m,
+                "ret_cash": 0.0003,
+                "ret_bonds": 0.002,
+                "ret_stocks": 0.01,
+                "ret_gold": 0.004,
+                "w_cash": 0.0,
+                "w_bonds": 0.0,
+                "w_stocks": 1.0,
+                "w_gold": 0.0,
+                "portfolio_return": 0.012,
+                "portfolio_value": 100_000 * (1.012**m),
+                "drawdown": -0.30,
+                "volatility_estimate": 0.14,
+                "rebalance": 0,
+                "go_to_cash": 0,
+                "reduce_risk": 0,
+                "end_early": 0,
+                "discomfort_1_5": 1,
+            }
+        )
+    aggressive_out = score_portfolio(
+        pd.DataFrame(aggressive_rows),
+        onboarding={"investment_horizon_years": 30},
+        calibration_model={},
+    )
+
+    conservative_rows = []
+    for m in range(1, 8):
+        conservative_rows.append(
+            {
+                "month_index": m,
+                "ret_cash": 0.0,
+                "ret_bonds": -0.02,
+                "ret_stocks": -0.20,
+                "ret_gold": -0.05,
+                "w_cash": 1.0,
+                "w_bonds": 0.0,
+                "w_stocks": 0.0,
+                "w_gold": 0.0,
+                "portfolio_return": -0.18,
+                "portfolio_value": 100_000 * (0.95**m),
+                "drawdown": -0.02,
+                "volatility_estimate": 0.25,
+                "rebalance": 0,
+                "go_to_cash": 1,
+                "reduce_risk": 1,
+                "end_early": 1 if m == 7 else 0,
+                "discomfort_1_5": 5,
+            }
+        )
+    conservative_out = score_portfolio(
+        pd.DataFrame(conservative_rows),
+        onboarding={"investment_horizon_years": 1},
+        calibration_model={},
+    )
+
+    low_reliability_rows = []
+    alt_weights = [
+        (1.0, 0.0, 0.0, 0.0),
+        (0.05, 0.05, 0.85, 0.05),
+        (1.0, 0.0, 0.0, 0.0),
+        (0.05, 0.05, 0.85, 0.05),
+        (1.0, 0.0, 0.0, 0.0),
+    ]
+    for m, w in enumerate(alt_weights, start=1):
+        low_reliability_rows.append(
+            {
+                "month_index": m,
+                "ret_cash": 0.0003,
+                "ret_bonds": -0.01 if m % 2 else 0.01,
+                "ret_stocks": -0.18 if m % 2 else 0.12,
+                "ret_gold": -0.04 if m % 2 else 0.05,
+                "w_cash": w[0],
+                "w_bonds": w[1],
+                "w_stocks": w[2],
+                "w_gold": w[3],
+                "portfolio_return": -0.12 if m % 2 else 0.08,
+                "portfolio_value": 100_000 * (0.99**m),
+                "drawdown": -0.25 if m % 2 else -0.05,
+                "volatility_estimate": 0.3,
+                "rebalance": 1 if m % 2 == 0 else 0,
+                "go_to_cash": 1 if m in (1, 3, 5) else 0,
+                "reduce_risk": 1 if m % 2 else 0,
+                "end_early": 1 if m == 5 else 0,
+                "discomfort_1_5": 5,
+            }
+        )
+    low_reliability_out = score_portfolio(
+        pd.DataFrame(low_reliability_rows),
+        onboarding={"investment_horizon_years": 1},
+        calibration_model={},
+    )
+
+    assert aggressive_out["risk_group_5"] == "Aggressive"
+    assert conservative_out["risk_group_5"] == "Very Conservative"
+    assert low_reliability_out["profile_reliability_label"] == "Low"

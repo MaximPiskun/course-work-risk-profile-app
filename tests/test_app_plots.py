@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import matplotlib.figure
+import numpy as np
 import pandas as pd
 
 import app
@@ -46,3 +47,18 @@ def test_allocation_and_asset_plots_return_figures() -> None:
     assert isinstance(fig_assets, matplotlib.figure.Figure)
     assert len(fig_assets.axes) == 1
     assert set(snapshot.columns) == {"Актив", "Было (индекс)", "Сейчас (индекс)", "Изменение"}
+
+
+def test_decision_marker_points_include_manual_only() -> None:
+    values = [100_000.0, 101_500.0, 99_200.0, 102_400.0]
+    log_df = pd.DataFrame(
+        {
+            "month_index": [1, 2, 3],
+            "decision_origin": ["auto", "manual", "manual"],
+        }
+    )
+
+    marker_x, marker_y = app._decision_marker_points(log_df, values)
+
+    assert np.array_equal(marker_x, np.array([2, 3]))
+    assert np.allclose(marker_y, np.array([99_200.0, 102_400.0]))

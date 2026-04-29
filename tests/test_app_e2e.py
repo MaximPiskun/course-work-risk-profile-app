@@ -86,6 +86,34 @@ def test_e2e_decision_mode_pauses_and_resume_returns_live() -> None:
     assert not action_radios
 
 
+def test_e2e_enter_decision_button_enables_pause_and_freezes_ticks() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    before_click = int(at.session_state["month_index"])
+    _click_button(at, BTN_ENTER_DECISION)
+
+    assert bool(at.session_state["decision_mode_active"]) is True
+    assert bool(at.session_state["sim_paused"]) is True
+    assert any(r.label == RADIO_ACTION_LABEL for r in at.radio)
+
+    paused_month = int(at.session_state["month_index"])
+    time.sleep(1.2)
+    at.run()
+    assert int(at.session_state["month_index"]) == paused_month == before_click
+
+
+def test_e2e_sticky_resume_button_returns_to_live_mode() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    _click_button(at, BTN_ENTER_DECISION)
+    _click_button(at, BTN_CANCEL_DECISION)
+
+    assert bool(at.session_state["decision_mode_active"]) is False
+    assert bool(at.session_state["sim_paused"]) is False
+
+
 def test_e2e_decision_controls_appear_only_in_decision_mode() -> None:
     at = AppTest.from_file("app.py")
     _go_to_simulation(at)
@@ -99,6 +127,20 @@ def test_e2e_decision_controls_appear_only_in_decision_mode() -> None:
 
     action_radios = [r for r in at.radio if r.label == RADIO_ACTION_LABEL]
     assert action_radios
+
+
+def test_e2e_rebalance_contains_bonds_slider_after_decision_click() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    _click_button(at, BTN_ENTER_DECISION)
+    action_radios = [r for r in at.radio if r.label == RADIO_ACTION_LABEL]
+    assert action_radios
+    action_radios[0].set_value(RADIO_REBALANCE)
+    at.run()
+
+    slider_labels = {s.label for s in at.slider}
+    assert {"Bonds, %", "Stocks, %", "Gold, %"}.issubset(slider_labels)
 
 
 def test_e2e_rebalance_preset_and_invalid_sum_blocks_apply() -> None:
@@ -130,6 +172,26 @@ def test_e2e_rebalance_preset_and_invalid_sum_blocks_apply() -> None:
     assert all(b.disabled for b in apply_buttons)
 
 
+def test_e2e_apply_decision_turns_off_pause_and_keeps_live_running() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    _click_button(at, BTN_ENTER_DECISION)
+    paused_month = int(at.session_state["month_index"])
+    _click_button(at, BTN_APPLY)
+
+    assert bool(at.session_state["decision_mode_active"]) is False
+    assert bool(at.session_state["sim_paused"]) is False
+
+    after_apply = int(at.session_state["month_index"])
+    assert after_apply >= paused_month + 1 or at.session_state["screen"] == "results"
+
+    if at.session_state["screen"] == "simulation":
+        time.sleep(1.2)
+        at.run()
+        assert int(at.session_state["month_index"]) >= after_apply
+
+
 def test_e2e_live_controls_present() -> None:
     at = AppTest.from_file("app.py")
     _go_to_simulation(at)
@@ -158,6 +220,15 @@ def test_e2e_early_finish_button_present() -> None:
     _go_to_simulation(at)
 
     assert any(b.label == BTN_EARLY for b in at.button)
+
+
+def test_e2e_early_finish_navigates_to_results() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    _click_button(at, BTN_EARLY)
+    subheaders = [s.value for s in at.subheader]
+    assert SUBHEADER_RESULTS in subheaders
 
 
 def test_e2e_sidebar_navigation_and_reset() -> None:
@@ -207,6 +278,30 @@ def test_e2e_mode_screen_contains_preplay_instructions() -> None:
     info_texts = [x.value for x in at.info]
     expected = "Перед стартом:"
     assert any(expected in t for t in info_texts)
+
+
+def test_e2e_mode_screen_contains_quick_brief_block() -> None:
+    at = AppTest.from_file("app.py")
+    at.run()
+    _click_button(at, BTN_START)
+    _click_button(at, BTN_NEXT)
+    _click_button(at, BTN_NEXT)
+    _click_button(at, BTN_NEXT)
+    _click_button(at, BTN_CHOOSE_MODE)
+
+    markdown_texts = [m.value for m in at.markdown]
+    assert any("20-30" in t for t in markdown_texts)
+    assert any("mode-cards-grid" in t for t in markdown_texts)
+
+
+def test_e2e_simulation_layout_wrappers_present() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    markdown_texts = [m.value for m in at.markdown]
+    assert any("sim-sticky-panel" in t for t in markdown_texts)
+    assert any("sim-metrics-grid" in t for t in markdown_texts)
+    assert any("sim-main-grid" in t for t in markdown_texts)
 
 
 def test_e2e_live_screen_shows_decision_hint_when_not_in_decision_mode() -> None:
