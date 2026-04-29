@@ -332,3 +332,22 @@ def test_e2e_chart_controls_block_present_near_graphs() -> None:
     markdown_texts = [m.value for m in at.markdown]
     assert any("sim-chart-controls" in t for t in markdown_texts)
     assert any(b.label == BTN_ENTER_DECISION for b in at.button)
+
+
+def test_e2e_decision_toggle_is_stable_over_multiple_clicks() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    enter_buttons = [b for b in at.button if b.label == BTN_ENTER_DECISION]
+    assert len(enter_buttons) == 1
+
+    for _ in range(4):
+        _click_button(at, BTN_ENTER_DECISION)
+        assert bool(at.session_state["decision_mode_active"]) is True
+        assert bool(at.session_state["sim_paused"]) is True
+
+        cancel_buttons = [b for b in at.button if b.label == BTN_CANCEL_DECISION]
+        assert len(cancel_buttons) == 1
+        _click_button(at, BTN_CANCEL_DECISION)
+        assert bool(at.session_state["decision_mode_active"]) is False
+        assert bool(at.session_state["sim_paused"]) is False

@@ -1353,7 +1353,7 @@ def render_simulation() -> None:
     status_text = "Пауза: режим решения" if decision_mode_active else "Live-наблюдение"
     tick_text = "Пауза" if st.session_state.sim_paused else f"{next_tick_seconds:.1f} с"
     st.markdown('<div class="sim-sticky-panel">', unsafe_allow_html=True)
-    sticky_cols = st.columns([1.2, 1.0, 1.0, 1.4], gap="small")
+    sticky_cols = st.columns([1.25, 1.0, 1.15], gap="small")
     sticky_cols[0].markdown(
         f"<div class='sim-sticky-label'>Статус</div><div class='sim-sticky-value'>{status_text}</div>",
         unsafe_allow_html=True,
@@ -1364,10 +1364,6 @@ def render_simulation() -> None:
     )
     sticky_cols[2].markdown(
         f"<div class='sim-sticky-label'>Режим рынка</div><div class='sim-sticky-value'>{regime_view['label']}</div>",
-        unsafe_allow_html=True,
-    )
-    sticky_cols[3].markdown(
-        "<div class='sim-sticky-label'>Управление</div><div class='sim-sticky-value'>Рядом с графиком</div>",
         unsafe_allow_html=True,
     )
     st.markdown("</div>", unsafe_allow_html=True)
@@ -1410,7 +1406,6 @@ def render_simulation() -> None:
 
     with decision_col:
         st.markdown("#### A. Панель решения")
-        st.caption("Включение/выключение режима решения находится рядом с графиками в блоке B.")
 
         early_clicked = st.button("Завершить досрочно", width="stretch")
 
@@ -1574,27 +1569,6 @@ def render_simulation() -> None:
 
     with context_col:
         st.markdown("#### B. Рыночный контекст")
-        st.markdown('<div class="sim-chart-controls">', unsafe_allow_html=True)
-        control_cols = st.columns([1.45, 1.25], gap="small")
-        control_cols[0].caption(
-            "Кнопка рядом с графиком: сначала оценивайте динамику, затем ставьте на паузу и принимайте решение."
-        )
-        if decision_mode_active:
-            if control_cols[1].button("Вернуться к наблюдению", key="chart_resume_live", width="stretch"):
-                _resume_live_mode()
-                st.rerun()
-        else:
-            if control_cols[1].button(
-                "Принять решение (пауза)",
-                key="chart_enter_decision",
-                type="primary",
-                width="stretch",
-            ):
-                _enter_decision_mode()
-                st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-        _simulation_heartbeat()
-
         live_snapshot = pd.DataFrame(
             {
                 "Актив": ["Cash", "Bonds", "Stocks", "Gold"],
@@ -1628,8 +1602,9 @@ def render_simulation() -> None:
         phase_text = f", {phase_label}, тик в фазе {phase_step}" if phase_label else ""
         st.write(f"Текущий рыночный режим: **{regime_view['label']}** ({regime}){phase_text}")
         st.caption(regime_view["hint"])
-        st.dataframe(live_snapshot, width="stretch", hide_index=True)
-        st.dataframe(snapshot, width="stretch", hide_index=True)
+        with st.expander("Доходности активов: текущий и прошлый тик", expanded=False):
+            st.dataframe(live_snapshot, width="stretch", hide_index=True)
+            st.dataframe(snapshot, width="stretch", hide_index=True)
 
         with st.expander("Что это значит: просадка и волатильность"):
             st.write("Просадка показывает снижение от предыдущего максимума, а волатильность — амплитуду колебаний доходности.")
@@ -1641,6 +1616,26 @@ def render_simulation() -> None:
         asset_index_df = _build_asset_index_df(returns_df, upto_month=month_idx)
         asset_snapshot = _build_asset_snapshot(asset_index_df)
         sim_log_df = pd.DataFrame(st.session_state.logs)
+
+        _simulation_heartbeat()
+        st.markdown('<div class="sim-chart-controls">', unsafe_allow_html=True)
+        chart_cols = st.columns([1.15, 0.85], gap="small")
+        if decision_mode_active:
+            chart_cols[0].warning("Пауза активна. Выберите действие слева и нажмите «Применить решение и продолжить».")
+            if chart_cols[1].button("Вернуться к наблюдению", key="chart_resume_live", width="stretch"):
+                _resume_live_mode()
+                st.rerun()
+        else:
+            chart_cols[0].caption("Графики обновляются в live-режиме.")
+            if chart_cols[1].button(
+                "Принять решение (пауза)",
+                key="chart_enter_decision",
+                type="primary",
+                width="stretch",
+            ):
+                _enter_decision_mode()
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
         t1, t2, t3, t4 = st.tabs(["Портфель", "Просадка", "Аллокация", "Активы"])
         with t1:
