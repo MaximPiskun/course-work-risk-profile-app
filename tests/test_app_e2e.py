@@ -323,3 +323,12 @@ def test_e2e_repeated_live_reruns_do_not_raise_exceptions() -> None:
         assert SUBHEADER_SIM in subheaders
         assert SUBHEADER_MODE not in subheaders
         assert len(at.exception) == 0
+
+
+def test_e2e_chart_controls_block_present_near_graphs() -> None:
+    at = AppTest.from_file("app.py")
+    _go_to_simulation(at)
+
+    markdown_texts = [m.value for m in at.markdown]
+    assert any("sim-chart-controls" in t for t in markdown_texts)
+    assert any(b.label == BTN_ENTER_DECISION for b in at.button)

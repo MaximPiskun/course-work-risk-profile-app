@@ -207,6 +207,13 @@ def inject_styles() -> None:
             font-weight: 600;
             margin-top: 0.05rem;
           }
+          .sim-chart-controls {
+            border: 1px solid #d6e4f6;
+            border-radius: 12px;
+            background: #f8fbff;
+            padding: 0.55rem 0.65rem;
+            margin: 0.2rem 0 0.55rem 0;
+          }
           @media (max-width: 900px) {
             .block-container {padding-top: 0.5rem; padding-bottom: 1.2rem;}
             .app-hero, .soft-card {padding: 0.85rem 0.9rem; border-radius: 12px;}
@@ -214,7 +221,8 @@ def inject_styles() -> None:
             .mode-cards-grid [data-testid="stHorizontalBlock"],
             .sim-main-grid [data-testid="stHorizontalBlock"],
             .sim-metrics-grid [data-testid="stHorizontalBlock"],
-            .sim-sticky-panel [data-testid="stHorizontalBlock"] {
+            .sim-sticky-panel [data-testid="stHorizontalBlock"],
+            .sim-chart-controls [data-testid="stHorizontalBlock"] {
               flex-wrap: wrap;
               gap: 0.45rem;
             }
@@ -236,6 +244,10 @@ def inject_styles() -> None:
               flex: 1 1 calc(50% - 0.3rem) !important;
             }
             .sim-sticky-panel [data-testid="stHorizontalBlock"] > div:last-child {
+              min-width: 100% !important;
+              flex: 1 1 100% !important;
+            }
+            .sim-chart-controls [data-testid="stHorizontalBlock"] > div {
               min-width: 100% !important;
               flex: 1 1 100% !important;
             }
@@ -1232,6 +1244,19 @@ def _simulation_heartbeat() -> None:
         _rerun_simulation_view()
 
 
+def _enter_decision_mode() -> None:
+    st.session_state.decision_mode_active = True
+    st.session_state.sim_paused = True
+    st.session_state.flash_message = "Режим решения включен: рынок и графики поставлены на паузу."
+
+
+def _resume_live_mode() -> None:
+    st.session_state.decision_mode_active = False
+    st.session_state.sim_paused = False
+    st.session_state.live_last_advance_at = float(time.monotonic())
+    st.session_state.flash_message = "Режим решения выключен. Live-движение продолжено."
+
+
 def render_simulation() -> None:
     if st.session_state.onboarding_profile is None or st.session_state.episode_returns is None:
         st.warning("Сначала заполните анкету и выберите режим.")
@@ -1341,24 +1366,10 @@ def render_simulation() -> None:
         f"<div class='sim-sticky-label'>Режим рынка</div><div class='sim-sticky-value'>{regime_view['label']}</div>",
         unsafe_allow_html=True,
     )
-    if decision_mode_active:
-        if sticky_cols[3].button("Вернуться к наблюдению", key="sticky_resume_live", width="stretch"):
-            st.session_state.decision_mode_active = False
-            st.session_state.sim_paused = False
-            st.session_state.live_last_advance_at = float(time.monotonic())
-            st.session_state.flash_message = "Режим решения выключен. Live-движение продолжено."
-            st.rerun()
-    else:
-        if sticky_cols[3].button(
-            "Принять решение (пауза)",
-            key="sticky_enter_decision",
-            type="primary",
-            width="stretch",
-        ):
-            st.session_state.decision_mode_active = True
-            st.session_state.sim_paused = True
-            st.session_state.flash_message = "Режим решения включен: рынок и графики поставлены на паузу."
-            st.rerun()
+    sticky_cols[3].markdown(
+        "<div class='sim-sticky-label'>Управление</div><div class='sim-sticky-value'>Рядом с графиком</div>",
+        unsafe_allow_html=True,
+    )
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="sim-metrics-grid">', unsafe_allow_html=True)
@@ -1399,7 +1410,7 @@ def render_simulation() -> None:
 
     with decision_col:
         st.markdown("#### A. Панель решения")
-        st.caption("Включение/выключение режима решения находится в закрепленной панели сверху.")
+        st.caption("Включение/выключение режима решения находится рядом с графиками в блоке B.")
 
         early_clicked = st.button("Завершить досрочно", width="stretch")
 
@@ -1561,10 +1572,29 @@ def render_simulation() -> None:
         else:
             st.info("Нажмите «Принять решение (пауза)», чтобы выбрать действие.")
 
-    _simulation_heartbeat()
-
     with context_col:
         st.markdown("#### B. Рыночный контекст")
+        st.markdown('<div class="sim-chart-controls">', unsafe_allow_html=True)
+        control_cols = st.columns([1.45, 1.25], gap="small")
+        control_cols[0].caption(
+            "Кнопка рядом с графиком: сначала оценивайте динамику, затем ставьте на паузу и принимайте решение."
+        )
+        if decision_mode_active:
+            if control_cols[1].button("Вернуться к наблюдению", key="chart_resume_live", width="stretch"):
+                _resume_live_mode()
+                st.rerun()
+        else:
+            if control_cols[1].button(
+                "Принять решение (пауза)",
+                key="chart_enter_decision",
+                type="primary",
+                width="stretch",
+            ):
+                _enter_decision_mode()
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+        _simulation_heartbeat()
+
         live_snapshot = pd.DataFrame(
             {
                 "Актив": ["Cash", "Bonds", "Stocks", "Gold"],
